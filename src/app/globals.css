@@ -166,10 +166,15 @@ body {
     0 0 0 0.5px rgba(255, 255, 255, 0.1);
 }
 
+/* 44px, the height of the slider and of every round button on the map. The
+   tabs inside grow with it rather than floating in the middle of it — see
+   `.dock-tabs .t-tab` — so 4px of padding is all that separates them from the
+   edge, as it was when the pill was 32. */
 .dock-pill {
   display: flex;
   align-items: center;
   gap: 2px;
+  height: 44px;
   padding: 4px;
   border-radius: 9999px;
 }
@@ -275,6 +280,121 @@ body {
    no pointer events, so every gesture — drag, click on the track, arrow keys,
    touch — is the browser's own and behaves the way the platform says it
    should. Only the appearance is ours. */
+/* ── The strip while it is being dragged ─────────────────────
+ *
+ * On a phone the ruler gets what five 44px buttons leave it, which is not
+ * much — and the moment it matters most is the moment those buttons matter
+ * least, because a finger is already on the ruler and cannot be anywhere
+ * else. So for the length of the drag they collapse and the ruler takes the
+ * row.
+ *
+ * Only below `sm`: above it the ruler has room, and buttons vanishing under
+ * the cursor would be a magic trick nobody asked for.
+ */
+@media (max-width: 639px) {
+  /* Slower and gentler than the shared token. This is the largest movement in
+     the interface — a third of the screen opening up — and `--ease-smooth-out`
+     is tuned for small ones: it spends most of its travel in the first
+     hundred milliseconds, which on something this size reads as a snap
+     followed by a crawl. This curve leaves evenly and arrives settled. */
+  .t-strip,
+  .t-strip > button,
+  .t-strip > *:not(.t-strip-ruler) > button {
+    transition:
+      width 420ms cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 420ms cubic-bezier(0.32, 0.72, 0, 1),
+      column-gap 420ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  /* The buttons collapse; nothing collapses the containers around them.
+  
+     The pair on the right sits in a wrapper — they share it with the panels
+     that hang off them — and that wrapper is sized by its contents, so its
+     width is `auto`. A transition cannot run from `auto`, which is why
+     collapsing the wrapper made the right-hand side disappear in one frame
+     while the left-hand side slid shut. Left alone, it simply follows the
+     buttons inside it, and follows them smoothly because they animate. */
+  /* Only the row's own controls. `.t-strip button` also matched everything
+     inside the panels that hang off this row — the theme tabs, the switches —
+     and collapsed them too if a panel happened to be open when the drag
+     started. Two levels deep is exactly the two that exist: the buttons
+     sitting in the row, and the pair wrapped with their panels. */
+  .t-strip[data-scrubbing="true"] > button,
+  .t-strip[data-scrubbing="true"] > *:not(.t-strip-ruler) > button {
+    width: 0;
+    min-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* The gaps go with them. Left behind, they held the row open around
+     elements that were no longer in it, and the ruler stopped short of the
+     edge it was supposed to reach. */
+  .t-strip[data-scrubbing="true"],
+  .t-strip[data-scrubbing="true"] > *:not(.t-strip-ruler) {
+    column-gap: 0;
+  }
+}
+
+/* The lead beside the clock — "+30′" — which exists only in the half of the
+   timeline that is a forecast.
+  
+   Width and margin rather than `display`, so it opens and closes instead of
+   appearing: crossing the present is a continuous gesture and the readout
+   should not punctuate it. `overflow: hidden` is what lets the text sit at
+   full size inside a box that is on its way to zero. */
+.t-lead {
+  display: inline-block;
+  width: 0;
+  margin-left: 0;
+  overflow: hidden;
+  /* Left, not right. Right-aligned, the box held the prime still and moved
+     the plus instead: "+9′" and "+10′" put their "+" eight pixels apart, so
+     the one character that never changes was the one that shifted as the
+     lead counted up. Anchored left, the plus is fixed and the digits grow
+     into the slack — which is what the slack is for. */
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    width var(--duration-fast) var(--ease-smooth-out),
+    margin-left var(--duration-fast) var(--ease-smooth-out);
+}
+
+/* Wide enough for the longest lead the window can hold, "+30′".
+  
+   Held open for the whole of a drag, whether or not there is a lead in it.
+   Closing it mid-scrub gave the ruler 34px back and moved every mark under
+   the finger — the readout tidying itself at the exact moment the marks are
+   the thing being read. Reserved from the moment of the press, the width is
+   settled before the drag starts and nothing shifts until it ends. */
+.t-lead[data-open="true"] {
+  width: 2.15rem;
+  margin-left: 0.25rem;
+}
+
+/* What holds still during a drag is the readout, not the lead inside it.
+  
+   The ruler must not resize mid-scrub — 34px back moves every mark under the
+   finger — but reserving the *slot* to achieve that pushed the clock left
+   whenever the drag was anywhere in the past, which is a forecast's worth of
+   space with no forecast in it. Pinning the box instead buys the same
+   stability and leaves the slot free to close, so the digits stay flush
+   against the right edge until there is genuinely a lead to make room for.
+  
+   Only below `sm`: above it the box carries this width at all times. */
+@media (max-width: 639px) {
+  .t-strip[data-scrubbing="true"] .t-readout {
+    width: 4.5rem;
+  }
+}
+
+/* Above `sm` the reservation moves up a level: the readout itself is pinned
+   to its widest state — see `sm:w-[4.5rem]` in Timeline — so the ruler cannot
+   shorten when the loop crosses the present. The lead keeps opening and
+   closing inside that fixed box, which is what leaves the clock flush against
+   the right edge whenever there is no lead beside it. */
+
 .tick-slider {
   /* The height a tick jumps to, and the height of the thumb: the two match,
      so a mark the thumb crosses briefly stands as tall as the thumb itself
@@ -461,8 +581,12 @@ body {
   opacity: 0;
   visibility: hidden;
   filter: blur(var(--panel-blur));
-  transform: translateY(calc(var(--distance-base) * -1)) scale(0.97);
-  transform-origin: top right;
+  /* Rises from below, and grows out of its bottom-right corner. Both panels
+     hang off buttons that now sit at the bottom of the screen; opening
+     downward from a top-right origin would have them travel away from the
+     control that summoned them. */
+  transform: translateY(var(--distance-base)) scale(0.97);
+  transform-origin: bottom right;
   /* This block is the exit: it is what the element transitions *to* when
      `data-open` goes away. Hence the shorter duration here and the longer one
      below — and the visibility delay has to track it, or the panel would go
@@ -472,6 +596,15 @@ body {
     filter var(--panel-exit) var(--ease-smooth-in),
     transform var(--panel-exit) var(--ease-smooth-in),
     visibility 0s linear var(--panel-exit);
+}
+
+/* The one panel that hangs off a button at the top of the screen opens the
+   other way. Declared before the open state, not after: the two selectors
+   weigh the same, so source order is what decides which wins once the panel is
+   up — and it has to be the open one. */
+.dock-panel.is-down {
+  transform: translateY(calc(var(--distance-base) * -1)) scale(0.97);
+  transform-origin: top right;
 }
 
 .dock-panel[data-open="true"] {
@@ -731,8 +864,35 @@ body {
   background: transparent;
 }
 
+/* 36px: the pill's 44 less its 4px of padding each side. The default 24 is
+   sized for the settings panel, where the tabs sit in a row of 12px labels;
+   here they have to fill a control the size of every button beside it, or the
+   selector reads as a small thing adrift in a large one.
+
+   Height only. The travelling pill's width and offset are measured off the
+   DOM by SlidingTabs, so they follow the tabs without being told. */
+.dock-tabs .t-tab {
+  height: 36px;
+  /* All three the same width, set by the widest label. Sized to their own text
+     they came out 34, 43 and 33, and the travelling pill changed shape as it
+     moved — which read as the control resizing rather than as the selection
+     moving along it.
+
+     A floor rather than `flex: 1`: the pill is sized by its contents, so a
+     flex share of nothing is still nothing. 44px is the width "mm/h" needs at
+     this size, and it happens to be the diameter of every round button on the
+     map, which is why the group sits so evenly beside them.
+
+     The padding stays tight for the same reason it was tightened: this pill
+     shares the top row with the place name, and every pixel it does not take
+     is a pixel of the name that survives truncation on a phone. */
+  min-width: 44px;
+  padding: 0 8px;
+}
+
 .dock-tabs .t-tabs-pill {
   top: 0;
+  height: 36px;
   background: var(--hover);
   box-shadow: none;
 }

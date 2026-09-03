@@ -72,18 +72,27 @@ function Pill({ place }: { place: Place | null }) {
 
   return (
     <div className="pointer-events-auto min-w-0">
-      <div className="dock-surface flex h-8 min-w-0 items-center gap-2 rounded-full px-3 text-[13px] font-medium">
+      {/* Two lines inside the same 44px. Sharing one line, the name and the
+          reading competed for a width neither could give up: a long comune was
+          cut to a third of itself while the temperature beside it sat
+          untouched. Stacked, the name has the pill to itself and the reading
+          sits under it in smaller type — which is also the order you read them
+          in: where you are, then what it is doing there.
+
+          The second line is what makes the description affordable on a phone.
+          It used to be dropped below `sm` because it cost the most width for
+          the least meaning; on a line of its own it costs the name nothing. */}
+      <div className="dock-surface flex h-11 min-w-0 flex-col justify-center gap-[3px] rounded-full px-4">
         {/* The first thing to give up space, because a shortened town name is
             still the town you are in. min-w-0 is what lets a flex item shrink
             below its content at all. */}
-        <span className="min-w-0 truncate">
+        <span className="min-w-0 truncate text-[13px] font-medium leading-none">
           <TextMorph as="span" duration={260} respectReducedMotion className="text-fg">
             {place.name}
           </TextMorph>
         </span>
         {place.weather && (
-          <>
-            <span className="text-muted shrink-0">·</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-none">
             {/* The temperature is refreshed every quarter of an hour, so this
                 one morphs while you are looking at it — which is the moment a
                 hard swap is most likely to be mistaken for a glitch. */}
@@ -91,20 +100,15 @@ function Pill({ place }: { place: Place | null }) {
               as="span"
               duration={260}
               respectReducedMotion
-              className="numeric text-fg-soft"
+              className="numeric text-fg-soft shrink-0"
             >
               {`${place.weather.temperature}°`}
             </TextMorph>
             {(() => {
               const Icon = iconFor(place.weather.kind, place.weather.isDay);
-              return (
-                <Icon size={15} className="text-fg-soft shrink-0" aria-hidden />
-              );
+              return <Icon size={13} className="text-fg-soft shrink-0" aria-hidden />;
             })()}
-            {/* Dropped on a narrow screen before anything else is: the icon
-                beside it already says "sereno", so it is the one element here
-                that costs width without adding meaning. */}
-            <span className="hidden shrink-0 sm:inline">
+            <span className="min-w-0 truncate">
               <TextMorph
                 as="span"
                 duration={260}
@@ -114,7 +118,7 @@ function Pill({ place }: { place: Place | null }) {
                 {place.weather.label}
               </TextMorph>
             </span>
-          </>
+          </span>
         )}
       </div>
     </div>

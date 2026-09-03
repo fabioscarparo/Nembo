@@ -51,6 +51,7 @@ const ICONS = [CloudDrop, CloudDrops, CloudRain, CloudStorm, Tornado2];
  *                     would keep the colours it sampled on first render.
  */
 function Scale({
+  place,
   product,
   open,
   paletteEpoch,
@@ -59,6 +60,11 @@ function Scale({
   open: boolean;
   /** Changes whenever the lookup table is rebuilt, so the scale resamples it. */
   paletteEpoch: number;
+  /** Where it opens. Positioning belongs to the caller: the panel hangs off
+   *  the button that opens it, and that button has moved once already — from
+   *  the top corner to the timeline's row — so a panel that hardcodes its own
+   *  corner stops following it. */
+  place: string;
 }) {
   const { gradient, unit, max, legend } = useMemo(() => {
     const lut = currentLut();
@@ -90,7 +96,7 @@ function Scale({
        across two elements, the panel animated beautifully and lost its frosted
        glass; merged, it keeps both. */
     <div
-      className="dock-panel dock-surface absolute right-4 top-16 w-64 rounded-2xl p-4"
+      className={`dock-panel dock-surface w-64 rounded-2xl p-4 ${place}`}
       data-open={open}
       /* Closed, it is not just invisible: `inert` takes it out of the tab
          order and hides it from assistive technology, which `visibility`

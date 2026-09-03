@@ -56,6 +56,11 @@ function GithubMark({ size = 14, className }: { size?: number; className?: strin
 }
 
 type Props = {
+  /** Where it opens. Positioning belongs to the caller: the panel hangs off
+   *  the button that opens it, and that button has moved once already — from
+   *  the top corner to the timeline's row — so a panel that hardcodes its own
+   *  corner stops following it. */
+  place: string;
   /** Drives the reveal. The panel stays mounted when closed so the transition
    *  can run in reverse, and `inert` is what takes it out of reach. */
   open: boolean;
@@ -87,6 +92,7 @@ const THEME_TABS: Record<ThemeChoice, string> = {
  * writes them to storage.
  */
 function Settings({
+  place,
   open,
   muted,
   onToggleSound,
@@ -119,7 +125,7 @@ function Settings({
 
   return (
     <div
-      className="dock-panel dock-surface absolute right-4 top-16 w-64 rounded-2xl p-4"
+      className={`dock-panel dock-surface w-64 rounded-2xl p-4 ${place}`}
       data-open={open}
       /* Closed, it leaves the tab order and the accessibility tree rather than
          merely going invisible — the same reason the legend does. */

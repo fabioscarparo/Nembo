@@ -66,6 +66,27 @@ export function setHaptics(next: boolean): void {
  * that fire it: a fresh identity every render rebuilt every handler on every
  * keystroke of a drag, and with it the buttons holding them.
  */
+/**
+ * Runs a trigger, or does not, and never lets the attempt escape.
+ *
+ * Every handler in the app opens with a call for feedback and does its real
+ * work afterwards, so anything thrown here would take the action with it — a
+ * button that buzzes on nothing at all is a small bug, and a locate button
+ * that does nothing because the motor threw is not. `sound.ts` has swallowed
+ * its own failures from the start for the same reason; this is the half that
+ * was missing.
+ */
+function fire(run: () => unknown): void {
+  if (!enabled) return;
+  try {
+    /* `trigger` returns a promise. A rejection would otherwise surface as an
+       unhandled rejection from a control that worked perfectly. */
+    void Promise.resolve(run()).catch(() => {});
+  } catch {
+    // No motor, no permission, or a platform that throws on the attempt.
+  }
+}
+
 export function useHaptics() {
   const { trigger } = useWebHaptics();
 
@@ -76,7 +97,7 @@ export function useHaptics() {
       /** Crossing a detent — the timeline's ticks. The same feedback iOS
        *  uses for a picker, which is exactly what the slider is. */
       select: () => {
-        if (enabled) trigger("selection");
+        fire(() => trigger("selection"));
       },
       /**
        * Any plain button press.
@@ -87,7 +108,7 @@ export function useHaptics() {
        * intensity keeps the two apart — a button is felt, not answered.
        */
       tap: () => {
-        if (enabled) trigger([{ duration: 10, intensity: 0.4 }]);
+        fire(() => trigger([{ duration: 10, intensity: 0.4 }]));
       },
     }),
     [trigger],

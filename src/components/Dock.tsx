@@ -1,14 +1,17 @@
 "use client";
 
 /**
- * The three controls that live in the corner, and nothing else.
+ * The quantity on screen, and the legend that explains it.
  *
- * Three because they are three kinds of thing: the quantity changes what the
- * radar measures, the legend explains what is on screen, the gear opens the
- * preferences. Sound and theme used to sit here too, which made a row of four
- * glyphs where half changed the data and half changed the page — and made
- * "which theme am I on?" a question you answered by pressing until it looked
- * right. They are named controls in a panel now; see Settings.tsx.
+ * The gear used to sit here too, behind a hairline that was apologising for
+ * the grouping: one pill held a control that changes what the radar measures
+ * and two that open panels. It has gone down to the timeline's row, where the
+ * things you press live. The legend stayed because it is about what is on
+ * screen right now — the same subject as the tabs beside it — and because it
+ * is the panel you open while reading the map rather than while setting it up.
+ *
+ * Two pills, not one. The divider is gone with the thing it was separating:
+ * a gap says the same and says it more quietly.
  *
  * Memoised, because it is rebuilt by every step of a scrub otherwise: dragging
  * the slider re-renders RadarMap, and these buttons and their icons have
@@ -16,16 +19,12 @@
  * cost of three buttons, it is keeping the hot path down to what changed.
  */
 import { memo, useMemo } from "react";
-import { Gear, InfoCircle } from "reicon-react";
+import { InfoCircle } from "reicon-react";
 
 import { PRODUCTS, PRODUCT_CYCLE, type ProductKey } from "@/lib/dpc";
 import SlidingTabs, { type TabOption } from "./SlidingTabs";
 
-/**
- * Fully controlled: the dock holds nothing. Both panels' open states live in
- * RadarMap because they are mutually exclusive, and a component that owns half
- * of a mutual exclusion owns a bug.
- */
+/** Fully controlled: the dock holds nothing of its own. */
 type Props = {
   /** Which quantity is on screen; drives which tab carries the pill. */
   product: ProductKey;
@@ -34,8 +33,6 @@ type Props = {
    *  whether its panel is up without the panel being in view. */
   legendOpen: boolean;
   onToggleLegend: () => void;
-  settingsOpen: boolean;
-  onToggleSettings: () => void;
 };
 
 /**
@@ -53,8 +50,6 @@ function DockControls({
   onPickProduct,
   legendOpen,
   onToggleLegend,
-  settingsOpen,
-  onToggleSettings,
 }: Props) {
   /* The unit is the label because it is the shortest honest name for what is
      on screen, and the one the legend's own heading repeats. The full name
@@ -74,7 +69,7 @@ function DockControls({
     /* `ml-auto` rather than the row's `justify-between`: the place pill is
        absent until a fix arrives, and with one child `justify-between` would
        park the dock on the left until it did. */
-    <div className="pointer-events-auto ml-auto shrink-0">
+    <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-2">
       <div className="dock-surface dock-pill">
         <SlidingTabs
           options={units}
@@ -83,34 +78,20 @@ function DockControls({
           label="Grandezza"
           className="dock-tabs numeric text-[10px] font-medium"
         />
-
-        {/* Hairline between the quantity and the two panels it has nothing to
-            do with. Without it the five controls read as one undifferentiated
-            row, which is what the redesign was getting away from. */}
-        <span className="dock-divider" aria-hidden />
-
-        <button
-          type="button"
-          onClick={onToggleLegend}
-          className="dock-btn"
-          aria-label="Come leggere il radar"
-          aria-pressed={legendOpen}
-          aria-expanded={legendOpen}
-        >
-          <InfoCircle size={16} className={legendOpen ? "text-fg" : undefined} />
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleSettings}
-          className="dock-btn"
-          aria-label="Impostazioni"
-          aria-pressed={settingsOpen}
-          aria-expanded={settingsOpen}
-        >
-          <Gear size={16} className={settingsOpen ? "text-fg" : undefined} />
-        </button>
       </div>
+
+      {/* Its own pill, at the same diameter as every round button on the map.
+          Inside the tabs' pill it would have read as a fourth quantity. */}
+      <button
+        type="button"
+        onClick={onToggleLegend}
+        className="dock-surface dock-btn dock-btn-lg dock-toggle rounded-full"
+        aria-label="Come leggere il radar"
+        aria-pressed={legendOpen}
+        aria-expanded={legendOpen}
+      >
+        <InfoCircle size={16} className={legendOpen ? "text-fg" : undefined} />
+      </button>
     </div>
   );
 }

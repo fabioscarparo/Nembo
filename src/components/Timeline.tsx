@@ -25,7 +25,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Play, Stop } from "reicon-react";
+import { Clock, Play, Stop } from "reicon-react";
 import { TextMorph } from "torph/react";
 
 import type { MotionSource } from "@/lib/nowcast";
@@ -44,6 +44,10 @@ type Props = {
    *  to the first tick. */
   value: number;
   onChange: (time: number) => void;
+  /** Snaps the thumb back to the present. Handed in rather than derived here
+   *  because "the present" is the caller's `latest`, and the timeline only
+   *  knows which of its own frames that is. */
+  onNow: () => void;
   /** Whether the loop is running. Owned by the caller so that scrubbing by
    *  hand can stop it, which is a decision about the map, not the slider. */
   playing: boolean;
@@ -119,8 +123,9 @@ function useAge(at: number | undefined) {
   return Math.max(0, Math.round((now - at) / 60_000));
 }
 
-/** The age, said the way it would be spoken — the value alone, so the word
- *  "aggiornato" can stay muted while the figure carries the emphasis. */
+/** The age, said the way it would be spoken. The value alone: the word
+ *  "aggiornato" is supplied by the caller, which is also where the two are
+ *  set — in one weight now, having been two. */
 function ageValue(minutes: number) {
   if (minutes < 1) return "adesso";
   if (minutes === 1) return "1 minuto fa";
@@ -149,6 +154,7 @@ export default function Timeline({
   onChange,
   playing,
   onTogglePlay,
+  onNow,
   forecastSource,
   trailing,
 }: Props) {
@@ -156,15 +162,24 @@ export default function Timeline({
   const age = useAge(frames[observedCount - 1]);
   const sound = useSound();
 
-  /* A detent is only worth announcing every so often. Dragged quickly the
-     thumb crosses ten frames in a tenth of a second, and firing on each one
-     turns the click into a rattle and the haptics into a buzz. 58 ms is the
-     interval ui.camera's own controls use. */
+  /* Fired when a mark is crossed, not when a frame changes.
+  
+     There are more frames than marks — sixty-one minutes over about forty
+     ticks — so the two do not line up, and clicking per frame meant the sound
+     and the ruler disagreed: marks went by in silence, and clicks arrived with
+     nothing moving under them. Gating on the mark the thumb actually leaves
+     puts the click on the thing the eye is following.
+  
+     The throttle stays, at less than half of what it was. It is now a floor on
+     how fast the ear can take detents rather than a stand-in for the pitch of
+     the ruler, which the mark test already provides — and at 58 ms a quick
+     flick across forty marks would have been rationed down to five clicks,
+     which is what made a fast scrub feel unhitched from the drag. */
   const lastDetent = useRef(0);
 
   const detent = useCallback(() => {
     const now = performance.now();
-    if (now - lastDetent.current < 58) return;
+    if (now - lastDetent.current < 24) return;
     lastDetent.current = now;
     haptics.select();
     sound.tick();
@@ -181,6 +196,11 @@ export default function Timeline({
      The counter is what replays the animation. It rides in the element key,
      so React remounts that span and the CSS animation starts again from the
      top — restarting a running animation is otherwise surprisingly awkward. */
+  /* True between pressing the ruler and letting go. Only the row below reads
+     it, and only on a narrow screen, where it hands the ruler the width the
+     buttons were holding. */
+  const [scrubbing, setScrubbing] = useState(false);
+
   const [pulses, setPulses] = useState<number[]>(() =>
     Array(MIN_TICKS).fill(0),
   );
@@ -197,15 +217,78 @@ export default function Timeline({
      already at the right density; the observer then only has to catch
      genuine resizes. */
   const track = useRef<HTMLDivElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const ruler = useRef<HTMLDivElement>(null);
+
+  /* Held while the row is opening or closing. The observer fires on every
+     frame of that, and refitting on each one made the ruler re-densify twice
+     on the way out and twice on the way back — marks visibly rearranging
+     under a finger that had not moved. The count is set once, to what the
+     final width will be, and the animation is left to spread the marks it
+     already has into place. */
+  const locked = useRef(false);
 
   const fitTicks = useCallback(
     (width: number) => {
-      if (width <= 0) return;
+      if (locked.current || width <= 0) return;
       const next = tickCountFor(width, frames.length);
       setPulses((prev) => (prev.length === next ? prev : Array(next).fill(0)));
     },
     [frames.length],
   );
+
+  /**
+   * What the track will measure once the row has finished opening.
+   *
+   * The expanded pill is the whole strip; the track gets that, less the pill's
+   * own padding, the gap inside it and the readout beside it. All four are
+   * read off the DOM rather than repeated here, so changing any of them in the
+   * stylesheet cannot leave this holding a stale number.
+   */
+  const expandedTrack = useCallback(() => {
+    const row = strip.current;
+    const pill = ruler.current;
+    if (!row || !pill) return 0;
+    const cs = getComputedStyle(pill);
+    const readout = pill.lastElementChild?.getBoundingClientRect().width ?? 0;
+    return (
+      row.clientWidth -
+      parseFloat(cs.paddingLeft) -
+      parseFloat(cs.paddingRight) -
+      parseFloat(cs.columnGap || "0") -
+      readout
+    );
+  }, []);
+
+  /* The final density, set before the row starts moving. Only below `sm`:
+     that is the only width where anything collapses, and above it the lock
+     would just be holding a stale count. */
+  const beginScrub = useCallback(() => {
+    setScrubbing(true);
+    if (!window.matchMedia("(max-width: 639px)").matches) return;
+    const target = expandedTrack();
+    if (target <= 0) return;
+    const next = tickCountFor(target, frames.length);
+    setPulses((prev) => (prev.length === next ? prev : Array(next).fill(0)));
+    locked.current = true;
+  }, [expandedTrack, frames.length]);
+
+  /* Released, but the row is still closing — so the lock stays on until the
+     pill has finished travelling and the observer can be trusted again. */
+  const endScrub = useCallback(() => {
+    setScrubbing(false);
+    const pill = ruler.current;
+    if (!pill || !locked.current) return;
+    const done = () => {
+      locked.current = false;
+      const el = track.current;
+      if (el) fitTicks(el.getBoundingClientRect().width);
+    };
+    pill.addEventListener("transitionend", done, { once: true });
+    /* A transition that never runs — reduced motion, or a release in the same
+       frame as the press — would otherwise leave the lock on for good. */
+    window.setTimeout(done, 400);
+  }, [fitTicks]);
 
   useLayoutEffect(() => {
     const el = track.current;
@@ -252,18 +335,6 @@ export default function Timeline({
   const ahead = index > nowIndex;
   const minutesAhead = Math.round((value - frames[nowIndex]) / 60_000);
 
-  /* The one state with no lead time to report, and so the one whose second
-     line is free. Its label is the only string that did not fit a compact
-     readout, so it takes that line instead of forcing the box wider. */
-  const noForecast = ahead && forecastSource === "none";
-
-  /* Both sources say "Previsione": each is a real forecast with a real lead
-     time, and the difference between them is one of confidence rather than
-     of kind. The distinction is not thrown away — it is carried in the
-     accessible description, where it can be spelled out properly instead of
-     compressed into a word that would have to carry more than a word can. */
-  const status = noForecast ? "Non" : ahead ? "Previsione" : "Rilevato";
-
   const clock = (t: number) =>
     new Date(t).toLocaleTimeString("it-IT", {
       hour: "2-digit",
@@ -282,26 +353,36 @@ export default function Timeline({
           here rather than in the page because the timeline is the only thing
           that knows how tall it is, and the line has to sit just above it
           however that changes. */}
-      <p className="on-map text-muted pointer-events-none text-center text-[11px]">
-        Dati radar del{" "}
-        <span className="text-fg-soft">
-          Dipartimento della Protezione Civile
-        </span>
-        {age !== null && (
-          <>
-            {/* Separated by a middot rather than punctuated: the credit and
-                the freshness are two facts of equal weight about the same
-                data, not a sentence with a subordinate clause. */}
-            <span className="mx-1.5 opacity-50">·</span>
-            aggiornato{" "}
-            {/* The figure in the same weight as the attribution beside it:
-                both are the fact, and the words around them are scaffolding. */}
-            <span className="text-fg-soft">{ageValue(age)}</span>
-          </>
-        )}
-      </p>
+      {/* Two lines, one colour. The freshness used to sit after the credit
+          behind a middot, with the two figures that matter set a shade darker
+          than the words around them — which made a line of four weights that
+          read as three separate remarks rather than one caption. Both lines
+          are full-strength ink now; `on-map` is what keeps them legible over
+          whatever the map happens to be showing underneath.
 
-      <div className="flex w-full max-w-[46rem] items-center justify-center gap-2">
+          The reading goes first because it is the one that changes: how old
+          the picture is answers a question you might actually be asking. The
+          attribution below it is required by the DPC's terms and does not
+          change from one minute to the next.
+
+          It lives here rather than in the page because the timeline is the
+          only thing that knows how tall it is, and this has to sit just above
+          it however that changes. */}
+      <div className="on-map text-fg pointer-events-none flex flex-col items-center gap-[3px] text-center text-[11px] leading-tight">
+        {age !== null && <p>aggiornato {ageValue(age)}</p>}
+        <p>Dati radar del Dipartimento della Protezione Civile</p>
+      </div>
+
+      {/* Wider than it was. The strip used to hold play, the ruler and one
+          button; it now holds five buttons, and at 46rem the ruler was giving
+          up its width to them — the marks were spaced by what the buttons left
+          rather than by the pitch they are meant to have. Still capped, so the
+          control does not stretch across a very wide monitor. */}
+      <div
+        ref={strip}
+        className="t-strip flex w-full max-w-[64rem] items-center justify-center gap-1.5 sm:gap-2"
+        data-scrubbing={scrubbing}
+      >
         {/* Its own surface, not a compartment of the slider's. The two are
             different kinds of control — one is a switch, the other a
             continuous scrub — and a pill each says so, the way the dock
@@ -320,7 +401,29 @@ export default function Timeline({
           </span>
         </button>
 
-        <div className="dock-surface grid h-11 min-w-0 max-w-[38rem] flex-1 grid-cols-[1fr_auto] items-center gap-3 rounded-full pl-4 pr-4">
+        {/* Back to the present. Its own button rather than a tap on the ruler:
+            the present is one minute out of sixty-one and landing on it by
+            hand means aiming, which is the opposite of what a scrub is for.
+            Disabled when already there, so it reads as a state and not just
+            as a control that does nothing. */}
+        <button
+          type="button"
+          onClick={onNow}
+          disabled={index === nowIndex}
+          /* The fade is on the glyph, not on the button. `opacity` on the
+             surface takes the frosted panel down with it — a `backdrop-filter`
+             is composited with the element it belongs to — so a disabled
+             button stopped being a pill over the map and became a pale patch
+             of the map itself. The icon is the part that should look spent. */
+          className="dock-surface dock-btn dock-btn-lg shrink-0 rounded-full disabled:cursor-default"
+          aria-label="Torna all'istante attuale"
+        >
+          <Clock size={16} className={index === nowIndex ? "opacity-40" : undefined} />
+        </button>
+
+        <div
+          ref={ruler}
+          className="t-strip-ruler dock-surface grid h-11 min-w-0 max-w-[52rem] flex-1 grid-cols-[1fr_auto] items-center gap-2 rounded-full px-3 sm:gap-3 sm:px-4">
           <div className="tick-slider" ref={track}>
           <div className="tick-marks" aria-hidden="true">
             {pulses.map((count, i) => {
@@ -365,93 +468,117 @@ export default function Timeline({
                arrives a few milliseconds later. Without it the browser
                swallows that first tick — the one that tells you the control
                is live — and the scrub feels mute until the second frame. */
-            onPointerDown={() => sound.prime()}
+            onPointerDown={() => {
+              sound.prime();
+              beginScrub();
+            }}
             /* Letting go, once. `onPointerUp` misses the drag that ends off
                the element and the gesture the browser cancels, and the range
                has pointer capture, so both are routed back here. */
-            onPointerUp={() => sound.release()}
-            onPointerCancel={() => sound.release()}
+            onPointerUp={() => {
+              sound.release();
+              endScrub();
+            }}
+            onPointerCancel={() => {
+              sound.release();
+              endScrub();
+            }}
+            /* Belt and braces: a capture lost to a system gesture — the swipe
+               that pulls down a notification shade mid-drag — fires neither of
+               the two above, and the row would stay expanded with no drag under
+               it. */
+            onLostPointerCapture={() => endScrub()}
             onChange={(e) => {
               const at = Number(e.currentTarget.value);
               const next = frames[at];
               if (next === value) return;
+              /* The mark, not the minute. Same test `rippleTo` uses to decide
+                 what to light, so what is heard and what lights up are the
+                 same event rather than two approximations of it. */
+              const crossed = tickOf(at) !== tickOf(index);
               rippleTo(at);
-              detent();
+              if (crossed) detent();
               onChange(next);
             }}
           />
         </div>
 
-        {/* Morphed rather than replaced. The readout changes on every step of
-            a drag and on every frame of the loop, and a hard swap at that rate
-            reads as flicker — the digits appear to jump rather than to count.
-            Torph animates the characters that actually differ, so a minute
-            ticking over moves one digit and leaves the rest still. */}
-        {/* leading-[0] collapses the line boxes: torph renders its roots as
-            inline-block, so each one sat inside a 16px line box inherited from
-            here and the pair was pushed seven pixels apart by leading alone,
-            not by any margin. With the strut gone the gap is whatever we ask
-            for. */}
-        {/* Fixed box, right-aligned, tall enough for both lines whether or
-            not the second one is there.
+        {/* Only the clock. The two words that used to sit above it —
+            "Rilevato" and "Previsione" — named a distinction the readout was
+            already making: a time in the past is an observation and there is
+            nothing else it could be, and a time in the future carries a lead
+            beside it. The label was restating its own value.
 
-            It used to be 4.5rem, which fits "Rilevato" and "Previsione" and
-            not "Non disponibile" — the long label overflowed and stopped
-            lining up with the other two on the right edge. Sizing to the
-            longest string keeps all three flush; a fixed height keeps the
-            row from resizing when the second line goes away, which would
-            otherwise make the whole dock twitch as you cross the present.
+            The lead is what marks the forecast now, so it has to be legible
+            as a sign and not only as a number: it keeps the accent colour
+            when there is a forecast behind it, and drops to muted when the
+            motion could not be estimated and the frames ahead are empty. The
+            full explanation of which is which stays in `aria-valuetext`,
+            where it can be a sentence.
 
-            4.25rem, not the 6.25rem it was. The box has to reserve its widest
-            state or the dock twitches, but it was reserving eighty-seven
-            pixels for "Non disponibile" and then rendering "Rilevato" at
-            forty-six — leaving forty-one pixels of nothing pressed right up
-            against the ruler, in the state the timeline is in by default.
+            One line, sized to what is in it. The box used to reserve its
+            widest state — "18:35 +30′" — so that crossing the present could
+            not resize the ruler under the finger dragging it. But the clock is
+            tabular and two-digit, so it never changes width; the only thing
+            that does is the lead, and the reservation was 34px of nothing
+            sitting beside the digits for the whole time the timeline is in its
+            default state. The lead opens and closes on its own instead. It
+            costs the ruler 34px when it appears, which is under a tick either
+            way: the count snaps to multiples of five, and it lands on the same
+            number at both widths.
 
-            So the long label takes two lines instead. It appears only where
-            there is no lead time to show, which is exactly the state whose
-            second line is already empty — the room it needs is room nothing
-            else wanted. CSS wrapping could not do this: torph splits its
-            text into inline-block spans joined by a non-breaking space, so
-            there is no break opportunity to give it. Splitting the string
-            ourselves also puts the break where we want it.
+            Above `sm` the box is pinned to its widest state instead. The
+            trade goes the other way there: the ruler has hundreds of pixels
+            and cannot afford to shorten every time the loop crosses the
+            present, while 34px of slack beside the digits costs nothing you
+            can see. The lead still opens and closes inside it, so the clock
+            still sits flush right whenever there is no lead to make room
+            for.
 
-            The widest string the box must now hold is "disponibile" at
-            61.8px, not the whole phrase at 87.3, and the ruler gets the
-            difference. Right-aligned, so every line stays flush with the
-            other labels. */}
-        <div className="flex h-[25px] w-[4.25rem] flex-col justify-center items-end leading-[0]">
+            Not morphed either, for the reason the clock never was: it changes
+            on every step of a drag and on every frame of the loop, and
+            animating a value that moves that often turns a readout into
+            something you wait for rather than read. */}
+        <div className="t-readout numeric flex h-[25px] items-center justify-end text-[13px] font-medium leading-none sm:w-[4.5rem]">
+          {/* Morphed: only the digits that differ move, so a minute ticking
+              over turns one character and leaves the rest still, where a hard
+              swap at this rate reads as the whole readout flickering.
+
+              The lead beside it is not morphed. It carries its own colour —
+              the accent that marks a forecast — and TextMorph takes a string,
+              so folding the two together would have cost the one thing that
+              distinguishes a forecast from an observation now that the labels
+              are gone. */}
           <TextMorph
-            as="div"
+            as="span"
             duration={200}
             ease="cubic-bezier(0.22, 1, 0.36, 1)"
             respectReducedMotion
-            className="text-muted text-right text-[9px] font-medium uppercase leading-none tracking-[0.08em]"
+            className={ahead ? "text-fg-soft" : "text-fg"}
           >
-            {status}
+            {clock(value)}
           </TextMorph>
-          {noForecast ? (
-            /* The rest of the label, in the label's own type rather than the
-               value's: it is still the status talking, and setting it at
-               13px would read as a number that failed to render. */
-            <div className="text-muted mt-[3px] text-right text-[9px] font-medium uppercase leading-none tracking-[0.08em]">
-              disponibile
-            </div>
-          ) : (
-            /* Not morphed. The clock changes on every step of a drag and on
-               every frame of the loop, and animating a value that moves that
-               often turns a readout into something you wait for rather than
-               read. The label above changes twice in a whole scrub, at the
-               boundary — which is exactly when a morph earns its place. */
-            <div
-              className={`numeric mt-[3px] text-[13px] font-medium leading-none ${
-                ahead ? "text-[var(--ramp-6)]" : "text-fg"
-              }`}
-            >
-              {ahead ? `+${minutesAhead}′` : clock(value)}
-            </div>
-          )}
-          </div>
+          {/* The slot is always here, whether or not there is a lead to put
+              in it. Rendered only when ahead, it pushed the clock 32px to the
+              left the moment the present was crossed — the one thing a fixed,
+              right-aligned box exists to prevent. Reserved, the digits keep
+              their column and only the lead appears. */}
+          {/* Always mounted, and closed to nothing when there is no lead to
+              show. Mounted only when ahead it appeared from nowhere and shoved
+              the digits 32px sideways in a single frame; reserved at full
+              width it left that space empty whenever the timeline was showing
+              an observation, which is most of the time. Opening it is the only
+              version with neither fault. */}
+          <span
+            aria-hidden={!ahead}
+            data-open={ahead}
+            className={`t-lead ${
+              forecastSource === "none" ? "text-muted" : "text-[var(--ramp-6)]"
+            }`}
+          >
+            {ahead ? `+${minutesAhead}′` : ""}
+          </span>
+        </div>
         </div>
 
         {trailing}

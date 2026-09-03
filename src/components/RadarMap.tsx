@@ -26,7 +26,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Location } from "reicon-react";
+import { Gear, Location } from "reicon-react";
 import {
   MapLibreMap,
   Marker,
@@ -241,6 +241,19 @@ export default function RadarMap() {
     setPlaying(next);
   }, [playing, haptics, sound]);
 
+  /* Back to the present. `null` is how "follow live" is spelled — see
+     `displayed` — so this is a return to the default rather than a jump to a
+     particular minute, and a new observation arriving afterwards keeps the
+     thumb on it instead of stranding it one frame behind. Playback stops for
+     the same reason scrubbing does: the loop would walk straight off the
+     instant that was just asked for. */
+  const showNow = useCallback(() => {
+    haptics.tap();
+    sound.slide();
+    setPlaying(false);
+    setSelected(null);
+  }, [haptics, sound]);
+
   const toggleLegend = useCallback(() => {
     haptics.tap();
     setLegendOpen((v) => !v);
@@ -274,7 +287,17 @@ export default function RadarMap() {
 
     const onPointerDown = (e: PointerEvent) => {
       const el = e.target as HTMLElement | null;
-      if (el?.closest(".dock-panel") || el?.closest(".dock-pill")) return;
+      /* `.dock-toggle` is the two buttons that open these panels, which no
+         longer live inside `.dock-pill`. Without it, pressing the gear while
+         its panel is up closes it here and reopens it in the button's own
+         handler, and the panel appears never to shut. */
+      if (
+        el?.closest(".dock-panel") ||
+        el?.closest(".dock-pill") ||
+        el?.closest(".dock-toggle")
+      ) {
+        return;
+      }
       dismiss();
     };
 
@@ -1026,23 +1049,29 @@ export default function RadarMap() {
   const locate = useCallback(() => {
     const m = map.current;
 
+    /* The work first, the feedback after it.
+    
+       Both calls below are decorative, and both used to run before any of
+       this. That put a sound and a motor on the path to the only thing the
+       button is for: anything either of them threw would return from the
+       handler with the watch never started, and the button would look dead
+       for a reason that has nothing to do with geolocation. */
+    if (position && m) {
+      m.flyTo({ center: position, zoom: 8, duration: 900 });
+    } else {
+      if (watch.current !== null) {
+        navigator.geolocation?.clearWatch(watch.current);
+        watch.current = null;
+      }
+      flown.current = false;
+      startWatching();
+    }
+
     haptics.tap();
     /* Fired on the press, not on the fix. The permission prompt can sit there
        for a minute or never be answered, and a sound arriving then belongs to
        nothing the visitor is still doing. This one confirms the press. */
     sound.success();
-
-    if (position && m) {
-      m.flyTo({ center: position, zoom: 8, duration: 900 });
-      return;
-    }
-
-    if (watch.current !== null) {
-      navigator.geolocation?.clearWatch(watch.current);
-      watch.current = null;
-    }
-    flown.current = false;
-    startWatching();
   }, [startWatching, position, haptics, sound]);
 
   return (
@@ -1060,21 +1089,20 @@ export default function RadarMap() {
           onPickProduct={pickProduct}
           legendOpen={legendOpen}
           onToggleLegend={toggleLegend}
-          settingsOpen={settingsOpen}
-          onToggleSettings={toggleSettings}
+        />
+
+        {/* Under the info button that opens it, which is the last thing in
+            this row — so the row's own right edge is the button's, and the
+            panel needs no offset of its own. `is-down` because this is the
+            one panel that hangs off a button at the top of the screen and so
+            has to open the other way. */}
+        <Legend
+          product={product}
+          open={legendOpen}
+          paletteEpoch={paletteEpoch}
+          place="is-down pointer-events-auto absolute right-4 top-full mt-2"
         />
       </div>
-
-      <Legend product={product} open={legendOpen} paletteEpoch={paletteEpoch} />
-      <Settings
-        open={settingsOpen}
-        muted={muted}
-        onToggleSound={toggleSound}
-        hapticsOn={hapticsOn}
-        onToggleHaptics={toggleHaptics}
-        theme={theme}
-        onPickTheme={pickTheme}
-      />
 
       {pinEl &&
         position &&
@@ -1098,18 +1126,27 @@ export default function RadarMap() {
           }}
           playing={playing}
           onTogglePlay={togglePlay}
+          onNow={showNow}
           forecastSource={sequence?.source ?? "none"}
           trailing={
-            /* Beside the timeline rather than up with the settings: finding
+            /* Anchored to the locate button rather than to the viewport. The
+               panel toggles sit directly above it, and the timeline's height
+               is not a constant — the credit line above it wraps on a narrow
+               screen — so an offset measured from the page would drift.
+               Positioned against the button they belong to, they cannot. */
+            <div className="relative flex shrink-0 items-center gap-2">
+            {/* Beside the timeline rather than up with the settings: finding
                yourself is an action you take on the map, like scrubbing, not
                a preference you set once. Same pill and same diameter as the
                play button at the other end, so the row reads as one control
-               strip with the slider between its two ends. */
+               strip with the slider between its two ends. */}
             <button
               type="button"
               onClick={locate}
               disabled={!locationAvailable}
-              className="dock-surface dock-btn dock-btn-lg shrink-0 rounded-full disabled:cursor-default disabled:opacity-40"
+              /* Fade on the glyph, never on the surface — see the clock
+                 button, which lost its frosted backdrop the same way. */
+              className="dock-surface dock-btn dock-btn-lg shrink-0 rounded-full disabled:cursor-default"
               aria-label={
                 !locationAvailable
                   ? "Geolocalizzazione non disponibile"
@@ -1124,12 +1161,57 @@ export default function RadarMap() {
                 className={
                   locating
                     ? "animate-pulse"
-                    : locationDenied
+                    : locationDenied || !locationAvailable
                       ? "opacity-40"
                       : undefined
                 }
               />
             </button>
+
+              {/* After the locate button, so the strip reads outward from the
+                  slider: where you are, then what the colours mean, then the
+                  preferences — nearest first.
+
+                  `flex-col-reverse` below `sm` keeps that reading when the row
+                  runs out of width and the pair stacks: the DOM order is the
+                  row's, and reversing the column puts info directly above
+                  locate with settings beyond it, rather than upside down. */}
+              {/* Beside the locate button, at every width. Inline rather than
+                  in a component of its own: it is one button, and the locate
+                  button beside it has always been inline for the same
+                  reason. */}
+              <button
+                type="button"
+                onClick={toggleSettings}
+                className="dock-surface dock-btn dock-btn-lg dock-toggle shrink-0 rounded-full"
+                aria-label="Impostazioni"
+                aria-pressed={settingsOpen}
+                aria-expanded={settingsOpen}
+              >
+                <Gear size={16} className={settingsOpen ? "text-fg" : undefined} />
+              </button>
+
+              {/* Anchored to the wrapper the button sits in. The mobile offset
+                  clears the stacked settings button: 44px and the 8px each
+                  side of it.
+
+                  From `lg` it slides out to sit centred over that button — the
+                  panel's half-width against the button's centre, 128 less the
+                  22px from the strip's right edge, negative because a centred
+                  panel reaches past the strip. `lg` rather than `sm` because
+                  that reach needs room to the right of the row, and a viewport
+                  under about 950px does not have it. */}
+              <Settings
+                open={settingsOpen}
+                muted={muted}
+                onToggleSound={toggleSound}
+                hapticsOn={hapticsOn}
+                onToggleHaptics={toggleHaptics}
+                theme={theme}
+                onPickTheme={pickTheme}
+                place="absolute bottom-full right-0 mb-2 lg:right-[-106px]"
+              />
+            </div>
           }
         />
       )}
