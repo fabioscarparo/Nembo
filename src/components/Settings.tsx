@@ -173,7 +173,7 @@ function Settings({
       <p className="panel-credit text-fg-soft text-[12px]">
         <Personalcard size={14} className="text-muted shrink-0" aria-hidden />
         <span>
-          Made by{" "}
+          Creato da{" "}
           <a href="https://fscarparo.com" target="_blank" rel="noreferrer">
             Fabio Scarparo
           </a>

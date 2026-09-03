@@ -40,21 +40,62 @@ const satoshi = localFont({
   ],
 });
 
+const SITE = "https://nembo.fscarparo.com";
+/* One title and one description, shared by the document head, the Open Graph
+   card and the Twitter card. Three copies of the same sentence drift the
+   moment one of them is edited. */
+const TITLE = "Nembo — Radar Meteorologico Italiano";
+const DESCRIPTION =
+  "Radar meteorologico italiano essenziale e curato, con nowcasting a 30 " +
+  "minuti, elaborato a partire dai dati del Dipartimento della Protezione " +
+  "Civile.";
+
 export const metadata: Metadata = {
-  metadataBase: new URL("https://radar.fscarparo.com"),
-  title: "Nembo",
-  description:
-    "Radar meteorologico italiano, dati del Dipartimento della Protezione Civile.",
+  /* Every relative URL in this object — the social card included — is resolved
+     against this, so it has to be the canonical origin and not a preview one. */
+  metadataBase: new URL(SITE),
+  title: TITLE,
+  description: DESCRIPTION,
+  applicationName: "Nembo",
+  authors: [{ name: "Fabio Scarparo", url: "https://fscarparo.com" }],
+  creator: "Fabio Scarparo",
+  keywords: [
+    "radar meteo",
+    "radar Italia",
+    "nowcasting",
+    "previsioni pioggia",
+    "Protezione Civile",
+    "precipitazioni",
+  ],
+  /* Deployed on more than one host — a Vercel preview URL always exists — so
+     the canonical says which one search engines should keep. */
+  alternates: { canonical: SITE },
   openGraph: {
-    title: "Nembo",
-    description:
-      "Radar meteorologico italiano, dati del Dipartimento della Protezione Civile.",
-    url: "https://radar.fscarparo.com",
-    siteName: "Nembo",
     type: "website",
+    locale: "it_IT",
+    url: SITE,
+    siteName: "Nembo",
+    title: TITLE,
+    description: DESCRIPTION,
+    /* No `images` here on purpose: `opengraph-image.tsx` is a file-convention
+       route, so Next emits both `og:image` and `twitter:image` itself, with a
+       content hash and the right dimensions. Declaring them again produces a
+       second, unhashed tag that some scrapers pick instead. */
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+  /* Added to the home screen on iOS this runs without browser chrome, which
+     suits a map that already owns the whole viewport. `black-translucent` lets
+     it reach under the status bar, matching `viewportFit: "cover"` below. */
+  appleWebApp: {
+    capable: true,
+    title: "Nembo",
+    statusBarStyle: "black-translucent",
   },
 };
-
 /**
  * The map owns the whole viewport, so the browser must not offer to zoom the
  * document on top of the map's own pinch, and the surface has to reach under
