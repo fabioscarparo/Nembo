@@ -185,20 +185,37 @@ export default function RadarMap() {
       if (next === theme) return;
       applyTheme(next);
       setThemeState(next);
-      sound.tick();
+      haptics.tap();
+      sound.slide();
     },
-    [theme, sound],
+    [theme, haptics, sound],
   );
 
+  /* One handler for the button and the space bar, so the two cannot drift into
+     making different sounds for the same action.
+
+     The next state is derived from the closure rather than from an updater:
+     React may run an updater twice for one dispatch, and a sound fired inside
+     would play twice for one press — the same trap `pickProduct` documents. */
+  const togglePlay = useCallback(() => {
+    const next = !playing;
+    haptics.tap();
+    if (next) sound.notification();
+    else sound.pop();
+    setPlaying(next);
+  }, [playing, haptics, sound]);
+
   const toggleLegend = useCallback(() => {
+    haptics.tap();
     setLegendOpen((v) => !v);
     setSettingsOpen(false);
-  }, []);
+  }, [haptics]);
 
   const toggleSettings = useCallback(() => {
+    haptics.tap();
     setSettingsOpen((v) => !v);
     setLegendOpen(false);
-  }, []);
+  }, [haptics]);
 
   /* Dismissed by pressing anywhere else, which on a map is most of the screen.
    *
@@ -247,10 +264,11 @@ export default function RadarMap() {
     (next: ProductKey) => {
       if (next === product) return;
       storeProduct(next);
-      sound.tick();
+      haptics.tap();
+      sound.slide();
       setProduct(next);
     },
-    [product, sound],
+    [product, haptics, sound],
   );
 
   const toggleHaptics = useCallback(() => {
@@ -261,16 +279,20 @@ export default function RadarMap() {
        Turning it off has nothing to add, and buzzing to confirm silence would
        be the one thing the setting exists to stop. */
     if (next) haptics.tap();
-    sound.tick();
+    /* Reads the state out loud: rising for on, falling for off. */
+    if (next) sound.toggleOn();
+    else sound.toggleOff();
   }, [hapticsOn, haptics, sound]);
 
   const toggleSound = useCallback(() => {
     const next = !muted;
     setMuted(next);
     setMutedState(next);
-    // Unmuting says so out loud; muting has nothing to add.
-    if (!next) sound.tick();
-  }, [muted, sound]);
+    haptics.tap();
+    /* Only one direction can be heard: `setMuted` has already silenced
+       playback by the time the muting sound would play. */
+    if (!next) sound.toggleOn();
+  }, [muted, haptics, sound]);
 
   /* The marker's DOM node is created once and handed to MapLibre, which owns
      its placement; React renders the icon into it through a portal, so the
@@ -694,7 +716,7 @@ export default function RadarMap() {
         return;
       }
       e.preventDefault();
-      setPlaying((p) => !p);
+      togglePlay();
     };
 
     window.addEventListener("keydown", onKey);
@@ -808,6 +830,12 @@ export default function RadarMap() {
   const locate = useCallback(() => {
     const m = map.current;
 
+    haptics.tap();
+    /* Fired on the press, not on the fix. The permission prompt can sit there
+       for a minute or never be answered, and a sound arriving then belongs to
+       nothing the visitor is still doing. This one confirms the press. */
+    sound.success();
+
     if (position && m) {
       m.flyTo({ center: position, zoom: 8, duration: 900 });
       return;
@@ -819,7 +847,7 @@ export default function RadarMap() {
     }
     flown.current = false;
     startWatching();
-  }, [startWatching, position]);
+  }, [startWatching, position, haptics, sound]);
 
   return (
     <>
@@ -872,7 +900,7 @@ export default function RadarMap() {
             setSelected(t);
           }}
           playing={playing}
-          onTogglePlay={() => setPlaying((p) => !p)}
+          onTogglePlay={togglePlay}
           forecastSource={sequence?.source ?? "none"}
           trailing={
             /* Beside the timeline rather than up with the settings: finding

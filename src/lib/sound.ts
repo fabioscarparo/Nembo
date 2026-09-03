@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The interface's two sounds, synthesised rather than downloaded.
+ * The interface's sounds, synthesised rather than downloaded.
  *
  * Nothing here is an asset: both are recipes that the Web Audio API renders on
  * the fly, so the app ships no audio files and the tick costs a few hundred
@@ -66,7 +66,112 @@ const sounds = {
       },
     ],
   }),
+
+  /* The six below are the Minimal patch from the same library's registry,
+     transcribed rather than installed. `npx @web-kits/audio add` writes all 26
+     of the pack into the project; these are the six the interface actually
+     fires, and they are plain data — the same `defineSound` calls as the two
+     above, so nothing about how sound is built here changes.
+
+     They share one shape: sine tones, no noise layer. That is the whole
+     difference from the tick above, which is mostly filtered air. Discrete
+     actions get a pitch; the tape's detents stay atonal, so a scrub does not
+     turn into a melody.
+
+     @see https://audio.raphaelsalaja.com/library/minimal */
+
+  /** Rising fifth. Switching something on. */
+  toggleOn: defineSound({
+    layers: [
+      {
+        source: { type: "sine", frequency: 880 },
+        envelope: { attack: 0, decay: 0.02, sustain: 0, release: 0.006 },
+        gain: 0.08,
+      },
+      {
+        source: { type: "sine", frequency: 1320 },
+        envelope: { attack: 0, decay: 0.02, sustain: 0, release: 0.006 },
+        delay: 0.03,
+        gain: 0.07,
+      },
+    ],
+  }),
+
+  /** The same two tones the other way round. Switching something off. */
+  toggleOff: defineSound({
+    layers: [
+      {
+        source: { type: "sine", frequency: 1320 },
+        envelope: { attack: 0, decay: 0.02, sustain: 0, release: 0.006 },
+        gain: 0.08,
+      },
+      {
+        source: { type: "sine", frequency: 880 },
+        envelope: { attack: 0, decay: 0.02, sustain: 0, release: 0.006 },
+        delay: 0.03,
+        gain: 0.07,
+      },
+    ],
+  }),
+
+  /** A short upward sweep, for the pill travelling between tabs. */
+  slide: defineSound({
+    source: { type: "sine", frequency: { start: 800, end: 1100 } },
+    envelope: { attack: 0.003, decay: 0.035, sustain: 0, release: 0.012 },
+    gain: 0.05,
+  }),
+
+  /** Two rising tones. Something has started. */
+  notification: defineSound({
+    layers: [
+      {
+        source: { type: "sine", frequency: 660 },
+        envelope: { attack: 0, decay: 0.05, sustain: 0, release: 0.02 },
+        gain: 0.1,
+      },
+      {
+        source: { type: "sine", frequency: 880 },
+        envelope: { attack: 0, decay: 0.04, sustain: 0, release: 0.015 },
+        delay: 0.08,
+        gain: 0.08,
+      },
+    ],
+  }),
+
+  /** A downward blip. Something has stopped. */
+  pop: defineSound({
+    source: { type: "sine", frequency: { start: 400, end: 200 } },
+    envelope: { attack: 0, decay: 0.04, sustain: 0, release: 0.012 },
+    gain: 0.1,
+  }),
+
+  /** A major fifth, C to G. Something arrived. */
+  success: defineSound({
+    layers: [
+      {
+        source: { type: "sine", frequency: 523 },
+        envelope: { attack: 0, decay: 0.05, sustain: 0, release: 0.015 },
+        gain: 0.1,
+      },
+      {
+        source: { type: "sine", frequency: 784 },
+        envelope: { attack: 0, decay: 0.05, sustain: 0, release: 0.015 },
+        delay: 0.06,
+        gain: 0.08,
+      },
+    ],
+  }),
 } as const;
+
+/**
+ * Playback level for the patch sounds.
+ *
+ * They carry their own gains, tuned by the pack's author for exactly this kind
+ * of interface, so this stays at 1 and lets those stand. The tick and release
+ * above are damped hard instead: they fire on every detent of a drag, dozens a
+ * second, and what is pleasant once is grating at that rate.
+ */
+const PATCH_VOLUME = 1;
 
 /** Names of the recipes above, so `playSound` cannot be asked for one that
  *  does not exist. */
@@ -148,6 +253,20 @@ export function useSound() {
        * real tick is heard rather than swallowed.
        */
       prime: () => playSound("tick", 0.0001),
+
+      /** The two switches in the settings panel. Direction carries the state:
+       *  you can hear which way it went without looking at it. */
+      toggleOn: () => playSound("toggleOn", PATCH_VOLUME),
+      toggleOff: () => playSound("toggleOff", PATCH_VOLUME),
+      /** Either row of tabs — the dock's quantity and the panel's theme. Both
+       *  are the same control, so both make the same sound. */
+      slide: () => playSound("slide", PATCH_VOLUME),
+      /** Playback started. */
+      notification: () => playSound("notification", PATCH_VOLUME),
+      /** Playback stopped. */
+      pop: () => playSound("pop", PATCH_VOLUME),
+      /** The map has your position. */
+      success: () => playSound("success", PATCH_VOLUME),
     }),
     [],
   );

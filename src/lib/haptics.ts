@@ -78,9 +78,16 @@ export function useHaptics() {
       select: () => {
         if (enabled) trigger("selection");
       },
-      /** Any plain button press. */
+      /**
+       * Any plain button press.
+       *
+       * A custom pulse rather than the `light` preset: that one is 15 ms, and
+       * every control in this app is a discrete press next to a timeline that
+       * already buzzes continuously while it scrubs. 10 ms at the preset's own
+       * intensity keeps the two apart — a button is felt, not answered.
+       */
       tap: () => {
-        if (enabled) trigger("light");
+        if (enabled) trigger([{ duration: 10, intensity: 0.4 }]);
       },
     }),
     [trigger],
