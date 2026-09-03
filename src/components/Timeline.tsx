@@ -228,6 +228,13 @@ export default function Timeline({
      already has into place. */
   const locked = useRef(false);
 
+  /* The track's width just before the row opened, kept so the way back is as
+     cheap to predict as the way out: the resting width is not derivable from
+     the strip the way the expanded one is — it is whatever five buttons and
+     their gaps leave over — but it was on screen a moment ago, so it is worth
+     remembering rather than deriving. */
+  const restingTrack = useRef(0);
+
   const fitTicks = useCallback(
     (width: number) => {
       if (locked.current || width <= 0) return;
@@ -268,27 +275,49 @@ export default function Timeline({
     if (!window.matchMedia("(max-width: 639px)").matches) return;
     const target = expandedTrack();
     if (target <= 0) return;
-    const next = tickCountFor(target, frames.length);
-    setPulses((prev) => (prev.length === next ? prev : Array(next).fill(0)));
+    restingTrack.current = track.current?.getBoundingClientRect().width ?? 0;
+    setPulses((prev) => {
+      const next = tickCountFor(target, frames.length);
+      return prev.length === next ? prev : Array(next).fill(0);
+    });
     locked.current = true;
   }, [expandedTrack, frames.length]);
 
-  /* Released, but the row is still closing — so the lock stays on until the
-     pill has finished travelling and the observer can be trusted again. */
+  /* Released. The density goes back at once, for the same reason it was set
+     up front on the way out: waiting for the row to finish closing meant the
+     marks stayed at the open spacing for the whole retreat and then thinned
+     in one step, at the moment everything else had come to rest — which is
+     exactly where a change is most visible. Thinned immediately, they settle
+     while the pill is still moving and nothing happens after it stops.
+
+     The lock stays on until the transition ends all the same: the observer
+     fires on every frame of the retreat, and would otherwise refit against
+     widths the row is only passing through. */
   const endScrub = useCallback(() => {
     setScrubbing(false);
     const pill = ruler.current;
     if (!pill || !locked.current) return;
+
+    if (restingTrack.current > 0) {
+      setPulses((prev) => {
+        const next = tickCountFor(restingTrack.current, frames.length);
+        return prev.length === next ? prev : Array(next).fill(0);
+      });
+    }
+
     const done = () => {
       locked.current = false;
+      /* One last fit against the real width, in case the viewport changed
+         while the row was open and the remembered figure is stale. Normally
+         it agrees with what was just set and changes nothing. */
       const el = track.current;
       if (el) fitTicks(el.getBoundingClientRect().width);
     };
     pill.addEventListener("transitionend", done, { once: true });
     /* A transition that never runs — reduced motion, or a release in the same
        frame as the press — would otherwise leave the lock on for good. */
-    window.setTimeout(done, 400);
-  }, [fitTicks]);
+    window.setTimeout(done, 500);
+  }, [fitTicks, frames.length]);
 
   useLayoutEffect(() => {
     const el = track.current;
