@@ -23,13 +23,13 @@
 /** Where the trace lives between sessions. */
 const KEY = "nembo:trace";
 
-/** Lines kept. Enough for the whole cold start several times over; small
- *  enough that the write below stays a rounding error. */
-const MAX_LINES = 80;
+/** Lines kept. Sized for a cold start plus a spell of poking at the unit
+ *  switcher afterwards, which is how the failure is currently reproduced. */
+const MAX_LINES = 160;
 
-/** After this many paints the cold start is over and nothing more is learned
- *  by recording a scrub. */
-const MAX_PAINTS = 14;
+/** Paints recorded. Beyond a cold start and a few dozen deliberate
+ *  interactions there is only scrubbing left, which teaches nothing. */
+const MAX_PAINTS = 40;
 
 /** This session's lines, in order. */
 let lines: string[] = [];

@@ -44,7 +44,8 @@ import {
 } from "@/lib/dpc";
 import { RAMPS, buildLut, watchTheme } from "@/lib/colormap";
 import { currentLut, lutEpoch, setLut } from "@/lib/tiles";
-import { trace, tracingPaint } from "@/lib/trace";
+import { debugRequested, trace, tracingPaint } from "@/lib/trace";
+import TracePanel from "./TracePanel";
 import {
   COMPOSITE_BOUNDS,
   DOMAIN,
@@ -125,6 +126,18 @@ function isDark(): boolean {
 const COLD_RETRIES = 3;
 const COLD_RETRY_MS = 900;
 
+/**
+ * How many times a sequence that came back empty is rebuilt before the map is
+ * left alone.
+ *
+ * Three, a second and a half apart: enough to outlast a tile fetch that lost
+ * its race on a cold start, short of retrying into a genuine outage. The
+ * observations land in the cache on the way, so a retry that succeeds costs
+ * arithmetic rather than another round of tiles.
+ */
+const SEQ_RETRIES = 3;
+const SEQ_RETRY_MS = 1500;
+
 export default function RadarMap() {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -147,6 +160,11 @@ export default function RadarMap() {
      without moving what you are looking at. */
   const [selected, setSelected] = useState<number | null>(null);
   const [sequence, setSequence] = useState<Sequence | null>(null);
+  /* Drives the retry above. State, because only a state change re-runs the
+     effect; the ref beside it is the attempt count, which must survive that
+     re-run without causing one of its own. */
+  const [seqAttempt, setSeqAttempt] = useState(0);
+  const seqAttempts = useRef(0);
   /* The steering flow, for the frames the radar cannot measure its own motion
      from. Null until it arrives, and null forever if it cannot — the radar
      works without it, it just goes back to having no forecast on quiet days. */
@@ -157,6 +175,11 @@ export default function RadarMap() {
   const [locationAvailable, setLocationAvailable] = useState(true);
   const [position, setPosition] = useState<[number, number] | null>(null);
   const [mapReady, setMapReady] = useState(false);
+
+  /* After mount: a static export renders this on the server, where there is no
+     location to read the flag out of. */
+  const [debug, setDebug] = useState(false);
+  useEffect(() => setDebug(debugRequested()), []);
   /* One at a time. Both hang off the dock at the same corner, so opening one
      while the other is up would stack two panels on the same pixels. */
   const [legendOpen, setLegendOpen] = useState(false);
@@ -530,32 +553,58 @@ export default function RadarMap() {
 
   useEffect(() => {
     if (latest === null) return;
-    const controller = new AbortController();
     let cancelled = false;
 
+    /* No AbortController any more. The tile fetches under this are shared with
+       every other caller for the same instant, so cancelling them on cleanup
+       cancelled work the *next* run was about to wait on. `cancelled` is the
+       whole of what this needs: ignore a result that arrived too late, and
+       leave the fetch to finish into the cache. */
     trace("seq.start", { product, latest, steering: steering ? "yes" : "no" });
-    buildSequence(product, latest, steering, controller.signal)
+    let again = 0;
+
+    /* A null result is not a state React can see: `sequence` is already null,
+       so nothing re-renders, no effect re-runs and nothing ever tries again.
+       That silence is what left the map empty until the unit switcher was
+       poked enough times to change the cache key by hand. Retried on a timer
+       instead, a bounded number of times. */
+    const retry = () => {
+      if (cancelled || seqAttempts.current >= SEQ_RETRIES) return;
+      seqAttempts.current += 1;
+      trace("seq.retry", { n: seqAttempts.current });
+      again = window.setTimeout(
+        () => setSeqAttempt((n) => n + 1),
+        SEQ_RETRY_MS,
+      );
+    };
+
+    buildSequence(product, latest, steering)
       .then((s) => {
-        trace("seq.ok", { cancelled, motion: s?.motion ? "yes" : "no" });
-        if (!cancelled) setSequence(s);
+        trace("seq.ok", { cancelled, got: s ? "seq" : "NULL", source: s?.source ?? "-" });
+        if (cancelled) return;
+        setSequence(s);
+        if (s) seqAttempts.current = 0;
+        else retry();
       })
       /* A missing baseline is the usual cause and it fixes itself on the next
          publication. The radar keeps working without motion; it just stops
          moving between observations. */
       .catch((e) => {
         trace("seq.FAIL", { cancelled, msg: String(e?.message ?? e).slice(0, 60) });
-        if (!cancelled) setSequence(null);
+        if (cancelled) return;
+        setSequence(null);
+        retry();
       });
 
     return () => {
       cancelled = true;
-      controller.abort();
+      window.clearTimeout(again);
     };
     /* Rebuilt when the steering flow arrives too: a sequence that fell back to
        "none" before the wind landed should become a forecast once it has. The
        observations it needs are already cached, so this costs arithmetic
        rather than another round of tiles. */
-  }, [latest, product, steering]);
+  }, [latest, product, steering, seqAttempt]);
 
   /* ── Timeline ────────────────────────────────────────────── */
 
@@ -698,16 +747,31 @@ export default function RadarMap() {
             continue;
           }
 
-          everPainted.current = true;
-          coldRetries.current = 0;
-
-          if (painted) {
-            /* Coordinates travel with the image: the crop moves and resizes
-               as the weather does, and the source is told where it belongs. */
-            src.updateImage(painted);
-          } else {
-            // Nothing to draw. A single transparent pixel clears the layer.
-            src.updateImage({ url: BLANK });
+          /* Guarded because MapLibre throws from here if the style behind the
+             source is not ready yet, and an exception escaping this loop takes
+             the whole pump with it — queue already emptied, nothing left to
+             restart it. The third silent dead end on this path. */
+          try {
+            if (painted) {
+              /* Coordinates travel with the image: the crop moves and resizes
+                 as the weather does, and the source is told where it belongs. */
+              src.updateImage(painted);
+            } else {
+              // Nothing to draw. A single transparent pixel clears the layer.
+              src.updateImage({ url: BLANK });
+            }
+            everPainted.current = true;
+            coldRetries.current = 0;
+          } catch (e) {
+            trace("draw.THREW", { msg: String((e as Error)?.message ?? e).slice(0, 60) });
+            if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
+              coldRetries.current += 1;
+              wanted.current = next;
+              await new Promise<void>((r) => {
+                window.setTimeout(r, COLD_RETRY_MS);
+              });
+            }
+            continue;
           }
         }
       } finally {
@@ -984,6 +1048,7 @@ export default function RadarMap() {
   return (
     <>
       <div ref={container} className="absolute inset-0" />
+      {debug && <TracePanel />}
       {/* One row, so the two pills divide the width instead of competing for
           it. Transparent to pointers between them, or the strip would eat
           drags on the map along the whole top edge. */}

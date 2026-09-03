@@ -232,7 +232,6 @@ async function stitch(
 async function observation(
   product: Product,
   time: number,
-  signal?: AbortSignal,
 ): Promise<Field | null> {
   const cacheKey = `${product.key}:${time}`;
 
@@ -242,17 +241,32 @@ async function observation(
   const pending = inFlight.get(cacheKey);
   if (pending) return pending;
 
-  const job = stitch(product, time, signal)
+  /* Deliberately not given the caller's signal.
+  
+     This job is shared: the next caller to ask for the same instant is handed
+     this very promise. A signal, though, belongs to one caller — so passing it
+     in meant whoever asked first could cancel the fetch everybody after them
+     was already waiting on, and they would read the aborted result as "no
+     observation at this instant" and give up.
+
+     That is not hypothetical. The sequence is rebuilt when the steering wind
+     lands, a few hundred milliseconds after the first attempt starts; the
+     rebuild aborted the first attempt and then inherited its cancelled
+     promise, so `buildSequence` returned null, `setSequence(null)` changed
+     nothing React could see, and the map stayed empty with every tile it
+     needed already on its way.
+
+     Letting the fetch finish costs a few small tiles that land in the cache
+     the retry is about to read. Cancelling it cost the whole picture. */
+  const job = stitch(product, time)
     .then((f) => {
       if (f) remember(cacheKey, f);
       return f;
     })
-    /* An abort is how this is meant to end when the caller moves on — a new
-       frame scrubbed to, or the component unmounting — so it resolves to "not
-       available" rather than rejecting. Left to reject it surfaced as an
-       unhandled rejection on every cleanup, which is a real error report for
-       something that is working as designed. `fetchTile` only ever rethrows
-       for aborts; everything else already returns null. */
+    /* `fetchTile` rethrows only for aborts, which can no longer originate
+       here; everything else already returns null. Kept so a surprise from
+       lower down resolves to "not available" rather than surfacing as an
+       unhandled rejection. */
     .catch(() => null)
     .finally(() => inFlight.delete(cacheKey));
 
@@ -681,14 +695,13 @@ export async function buildSequence(
   key: ProductKey,
   latest: number,
   steering?: Steering | null,
-  signal?: AbortSignal,
 ): Promise<Sequence | null> {
   const product = PRODUCTS[key];
   const baseline = BASELINE_MIN * 60_000;
 
   const [past, now] = await Promise.all([
-    observation(product, latest - baseline, signal),
-    observation(product, latest, signal),
+    observation(product, latest - baseline),
+    observation(product, latest),
   ]);
 
   if (!now) return null;
@@ -729,14 +742,13 @@ export async function buildSequence(
 export async function fieldAt(
   seq: Sequence,
   time: number,
-  signal?: AbortSignal,
 ): Promise<Field | null> {
   const step = seq.product.stepMinutes * 60_000;
   const grid = Math.floor(time / step) * step;
 
   // Past the last observation there is only one frame to work from.
   if (time >= seq.latest) {
-    const now = await observation(seq.product, seq.latest, signal);
+    const now = await observation(seq.product, seq.latest);
     if (!now) return null;
     return warp(now, seq.motion, (time - seq.latest) / 60_000, SCRATCH[0]);
   }
@@ -744,8 +756,8 @@ export async function fieldAt(
   const older = Math.min(grid, seq.latest - step);
   const newer = older + step;
   const [a, b] = await Promise.all([
-    observation(seq.product, older, signal),
-    observation(seq.product, newer, signal),
+    observation(seq.product, older),
+    observation(seq.product, newer),
   ]);
 
   if (!a && !b) return null;
