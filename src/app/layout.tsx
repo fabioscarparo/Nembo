@@ -77,10 +77,11 @@ export const metadata: Metadata = {
     siteName: "Nembo",
     title: TITLE,
     description: DESCRIPTION,
-    /* No `images` here on purpose: `opengraph-image.tsx` is a file-convention
-       route, so Next emits both `og:image` and `twitter:image` itself, with a
-       content hash and the right dimensions. Declaring them again produces a
-       second, unhashed tag that some scrapers pick instead. */
+    /* No `images` here on purpose: `opengraph-image.png` is picked up by the
+       file convention, so Next emits both `og:image` and `twitter:image`
+       itself, with a content hash and the dimensions read off the file.
+       Declaring them again produces a second, unhashed tag that some scrapers
+       pick instead. */
   },
   twitter: {
     card: "summary_large_image",
