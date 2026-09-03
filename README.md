@@ -5,8 +5,8 @@
 <h1 align="center">Nembo</h1>
 
 <p align="center">
-  <strong>Radar meteorologico italiano con nowcasting a 30 minuti,<br>
-  basato sui dati radar del Dipartimento della Protezione Civile.</strong>
+  <strong>Sleek, minimal and curated Italian weather radar with 30-minute<br>
+  nowcasting, built from data provided by the Italian Civil Protection Department.</strong>
 </p>
 
 <p align="center">
@@ -19,119 +19,119 @@
 </p>
 
 
-Nembo nasce con un obiettivo semplice: rendere immediatamente leggibile l'evoluzione della precipitazione sul territorio italiano, mostrando non solo ciò che il radar sta osservando in questo momento, ma anche come quella precipitazione si sta muovendo e dove potrebbe trovarsi nei prossimi trenta minuti.
+Nembo was built with a simple goal: to make the evolution of precipitation over Italy immediately legible, showing not only what the radar is observing right now, but also how that precipitation is moving and where it might be in the next thirty minutes.
 
-Il **Dipartimento della Protezione Civile (DPC)** aggiorna le osservazioni radar ogni cinque minuti. Nembo utilizza queste osservazioni per costruire una timeline continua di un'ora, con un fotogramma al minuto: trenta minuti di storia, il presente e trenta minuti di previsione.
+The **Italian Civil Protection Department (DPC)** updates its radar observations every five minutes. Nembo uses those observations to build a continuous one-hour timeline at one frame per minute: thirty minutes of history, the present, and thirty minutes of forecast.
 
-I fotogrammi intermedi non sono semplici interpolazioni grafiche. La precipitazione osservata viene trasportata nel tempo seguendo il movimento effettivamente misurato dal radar. In questo modo, la previsione rappresenta un **nowcasting basato sull'advection dell'eco radar**, anziché una semplice animazione dei dati.
+The intermediate frames are not graphical interpolations. Observed precipitation is carried forward in time along the motion actually measured by the radar. The forecast is therefore **nowcasting based on advection of the radar echo**, rather than a simple animation of the data.
 
-Nembo è un'applicazione statica e non utilizza un backend proprietario: l'elaborazione del moto e la generazione della previsione avvengono direttamente nel browser.
-
----
-
-## Funzionalità
-
-Nembo permette di esplorare la precipitazione attraverso tre diverse grandezze fisiche:
-
-- **Riflettività**, espressa in dBZ.
-- **Intensità di pioggia**, espressa in mm/h.
-- **Pioggia accumulata nell'ultima ora**, espressa in mm.
-
-La visualizzazione si adatta alla grandezza selezionata, mostrando una legenda contestuale e una scala cromatica dedicata.
-
-La **timeline di un'ora** consente di scorrere liberamente tra le osservazioni passate, il presente e la previsione. La riproduzione può essere avviata in loop oppure controllata rapidamente tramite tastiera, utilizzando la barra spaziatrice per play e pausa.
-
-La previsione si estende fino a **30 minuti nel futuro** e viene calcolata a partire dal moto osservato della precipitazione. Quando il movimento non può essere stimato con sufficiente affidabilità, Nembo ricorre al vento di trascinamento come alternativa.
-
-È inoltre possibile utilizzare la **geolocalizzazione** per centrare la mappa sulla propria posizione e visualizzare il nome del luogo e le condizioni meteorologiche attuali.
-
-L'interfaccia supporta **tema chiaro, scuro e sistema**, oltre alla possibilità di disattivare suoni e feedback aptici.
+Nembo is a static application with no backend of its own: motion estimation and forecast generation both happen directly in the browser.
 
 ---
 
-## Come funziona
+## Features
 
-### I dati radar
+Nembo lets you explore precipitation through three different physical quantities:
 
-Il DPC pubblica le osservazioni radar come tile WebP su griglia Web Mercator. Nembo utilizza un mosaico di **1280 × 1792 pixel** sull'Italia, con una risoluzione di circa **900 metri per pixel**.
+- **Reflectivity**, in dBZ.
+- **Rain rate**, in mm/h.
+- **Rainfall accumulated over the last hour**, in mm.
 
-Le immagini non contengono una visualizzazione cromatica pre-renderizzata: ogni pixel conserva direttamente il dato radar. Il **canale rosso** codifica linearmente il valore fisico (per la riflettività, da `0 → 0 dBZ` a `255 → 60 dBZ`) mentre il **canale alfa** distingue i dati validi dalle aree prive di osservazione. I canali verde e blu vengono ignorati, poiché il sottocampionamento della crominanza introdotto da WebP ne rende il contenuto non rappresentativo del segnale.
+The display adapts to the selected quantity, with a contextual legend and a dedicated colour scale.
 
-Lavorare sul dato grezzo offre due vantaggi fondamentali. Da un lato, Nembo può costruire dinamicamente la propria **palette cromatica** a partire dai token CSS del tema, senza perdere precisione a causa della quantizzazione in bande di colore. Dall'altro, la stima del movimento viene effettuata direttamente sui **valori di riflettività**, evitando che il calcolo debba inseguire una palette: valori diversi ridotti allo stesso colore rimangono distinguibili e i passaggi di soglia non introducono falsi movimenti.
+The **one-hour timeline** allows you to move freely between past observations, the present and the forecast. Playback can run on a loop or be controlled quickly from the keyboard, using the space bar for play and pause.
 
-### La previsione
+The forecast extends **30 minutes into the future** and is computed from the observed motion of the precipitation. When that motion cannot be estimated reliably, Nembo falls back on the steering wind.
 
-Nembo stima il movimento della precipitazione confrontando due osservazioni radar distanti trenta minuti e ricostruendo il campo di moto in tre passaggi.
+**Geolocation** can also be used to centre the map on your position and show the place name and current weather conditions.
 
-Le osservazioni vengono prima **ridotte di un fattore otto**, conservando il valore massimo di ogni cella. In questo modo i nuclei di precipitazione più intensi non vengono diluiti dalla media e rimangono sufficientemente caratterizzati per essere inseguiti. Su questa griglia viene quindi eseguito un **block matching**: ogni blocco cerca lo spostamento che meglio sovrappone le due osservazioni. I risultati vengono aggregati in un vettore di consenso, pesato in base alla quantità di eco che sostiene ciascuna stima. Se non emerge un accordo sufficiente, il moto viene considerato non misurabile.
+The interface supports **light, dark and system themes**, along with the option to turn off sound and haptic feedback.
 
-Il vettore di consenso descrive però soltanto il trasporto generale. Per catturare le variazioni locali, Nembo calcola un **optical flow Lucas-Kanade**, ottenendo un vettore per ogni cella. Dove l'eco è insufficiente, il flusso ottico può produrre stime arbitrarie, per questo ogni vettore viene vincolato al moto di consenso, limitandone lo scostamento senza eliminarne la direzione locale. Il campo risultante può quindi deformarsi dove i dati lo giustificano, mantenendo un comportamento coerente altrove. Le osservazioni vengono infine trasportate lungo questo campo con passi temporali di cinque minuti. Le traiettorie vengono integrate seguendo il flusso, anziché applicare una semplice traslazione lineare, la precipitazione può così ruotare, allungarsi e comprimersi durante il movimento.
+---
 
-Quando le osservazioni non consentono di ricostruire un consenso affidabile, Nembo utilizza come fallback il **vento in quota**, calcolato come media pesata sulla massa tra 850 e 500 hPa. Se anche questo dato non è disponibile, la previsione viene dichiarata assente anziché mostrare artificialmente il presente come futuro.
+## How it works
 
-L'intero processo richiede circa **120 ms** e viene eseguito in un **Web Worker**, mantenendo l'interfaccia reattiva durante la ricostruzione del campo di moto.
+### The radar data
+
+The DPC publishes radar observations as WebP tiles on a Web Mercator grid. Nembo uses a **1280 × 1792 pixel** mosaic over Italy, at a resolution of roughly **900 metres per pixel**.
+
+The images contain no pre-rendered colour view: every pixel holds the radar value itself. The **red channel** encodes the physical value linearly (for reflectivity, from `0 → 0 dBZ` to `255 → 60 dBZ`) while the **alpha channel** separates valid data from areas with no observation. The green and blue channels are ignored, since the chroma subsampling introduced by WebP makes their content unrepresentative of the signal.
+
+Working on the raw data offers two fundamental advantages. First, Nembo can build its own **colour palette** dynamically from the theme's CSS tokens, without losing precision to quantisation into colour bands. Second, motion is estimated directly on **reflectivity values**, so the computation never has to chase a palette: different values flattened to the same colour stay distinguishable, and threshold crossings introduce no false motion.
+
+### The forecast
+
+Nembo estimates the motion of precipitation by comparing two radar observations thirty minutes apart, reconstructing the motion field in three steps.
+
+The observations are first **reduced by a factor of eight**, keeping the maximum value of each cell. This keeps the most intense precipitation cores from being diluted by averaging, leaving them distinct enough to be tracked. **Block matching** then runs on this grid: each block looks for the displacement that best overlaps the two observations. The results are aggregated into a consensus vector, weighted by how much echo supports each estimate. If no sufficient agreement emerges, the motion is treated as unmeasurable.
+
+The consensus vector, however, describes only the overall transport. To capture local variation, Nembo computes a **Lucas-Kanade optical flow**, obtaining one vector per cell. Where echo is insufficient, optical flow can produce arbitrary estimates, which is why each vector is constrained toward the consensus motion, limiting how far it may depart from it without erasing its local direction. The resulting field can therefore deform where the data justify it, while staying coherent elsewhere. The observations are finally transported along this field in five-minute steps. Trajectories are integrated by following the flow rather than applying a simple linear translation, so precipitation can rotate, stretch and compress as it moves.
+
+When the observations do not allow a reliable consensus to be reconstructed, Nembo falls back on the **steering wind**, computed as a mass-weighted mean between 850 and 500 hPa. If that too is unavailable, the forecast is declared absent rather than artificially presenting the present as the future.
+
+The whole process takes about **120 ms** and runs in a **Web Worker**, keeping the interface responsive while the motion field is reconstructed.
 
 
 ---
 
-## Cosa può e non può prevedere
+## What it can and cannot forecast
 
-Nembo è un sistema di **nowcasting basato sul movimento della precipitazione osservata**. Questo comporta una conseguenza fondamentale: l'applicazione può trasportare nel futuro ciò che il radar sta già osservando, ma non può prevedere fenomeni che ancora non sono presenti nei dati.
+Nembo is a nowcasting system **based on the motion of observed precipitation**. This carries one fundamental consequence: the application can carry into the future what the radar is already observing, but it cannot forecast phenomena that are not yet present in the data.
 
-Una cella temporalesca che si formerà tra venti minuti, ad esempio, non è presente nell'osservazione attuale e quindi non può essere generata dalla previsione.
+A storm cell that will form twenty minutes from now, for example, is not present in the current observation and therefore cannot be generated by the forecast.
 
-Allo stesso modo, Nembo non è un modello meteorologico numerico: non simula l'atmosfera e non considera direttamente instabilità, orografia o altri processi fisici responsabili della formazione e dell'evoluzione delle precipitazioni.
+In the same way, Nembo is not a numerical weather model: it does not simulate the atmosphere and does not directly account for instability, orography or the other physical processes responsible for the formation and evolution of precipitation.
 
-L'obiettivo è più circoscritto: **stimare dove si sposterà ciò che il radar sta già osservando nell'orizzonte immediato dei successivi 30 minuti**.
+The goal is a narrower one: **to estimate where what the radar is already observing will move within the immediate horizon of the next 30 minutes**.
 
 ---
 
-## Struttura del progetto
+## Project structure
 
-Il progetto è organizzato separando la logica di acquisizione ed elaborazione dei dati dai componenti responsabili dell'interfaccia.
+The project is organised by separating data acquisition and processing from the components responsible for the interface.
 
 ```text
 src/lib/
-  grid.ts            geometria del dominio (zoom, tile, conversioni lat/lon)
-  flow.ts            stima del moto: consenso + flusso ottico denso
-  motion.worker.ts   stessa stima, eseguita fuori dal main thread
-  nowcast.ts         osservazioni, cache, warp, rendering dei fotogrammi
-  dpc.ts             contratto del servizio DPC, prodotti, copertura dei tile
-  tiles.ts           fetch e decodifica dei tile
-  colormap.ts        costruzione della palette dai token CSS
-  wind.ts            vento di trascinamento da Open-Meteo
-  place.ts           geocodifica inversa e condizioni attuali
-  visibility.ts      timer che si fermano quando la pagina non è visibile
-  basemap.ts         stile CARTO con fallback locale
+  grid.ts            domain geometry (zoom, tiles, lat/lon conversions)
+  flow.ts            motion estimation: consensus + dense optical flow
+  motion.worker.ts   the same estimation, run off the main thread
+  nowcast.ts         observations, cache, warping, frame rendering
+  dpc.ts             DPC service contract, products, tile coverage
+  tiles.ts           tile fetching and decoding
+  colormap.ts        palette built from the CSS tokens
+  wind.ts            steering wind from Open-Meteo
+  place.ts           reverse geocoding and current conditions
+  visibility.ts      timers that stop when the page is not visible
+  basemap.ts         CARTO style with a local fallback
   theme.ts
   sound.ts
-  haptics.ts         preferenze e feedback dell'utente
+  haptics.ts         user preferences and feedback
 
 src/components/
-  RadarMap.tsx       componente principale, mappa e interfaccia
-  Timeline.tsx       timeline, righello e riproduzione
-  Dock.tsx           selettore grandezza, legenda e impostazioni
-  Settings.tsx       pannello delle preferenze
-  Legend.tsx         scala dei colori
-  PlacePill.tsx      luogo e condizioni attuali
-  SlidingTabs.tsx    controllo a schede condiviso
+  RadarMap.tsx       main component, map and interface
+  Timeline.tsx       timeline, ruler and playback
+  Dock.tsx           quantity selector, legend and settings
+  Settings.tsx       preferences panel
+  Legend.tsx         colour scale
+  PlacePill.tsx      place and current conditions
+  SlidingTabs.tsx    shared tab control
 ```
 
 ---
 
-## Fonti dei dati
+## Data sources
 
-| Fonte | Utilizzo |
+| Source | Used for |
 |---|---|
-| [Dipartimento della Protezione Civile](https://radar.protezionecivile.it/) | Dati radar, con attribuzione mostrata all'interno dell'applicazione |
-| [Open-Meteo](https://open-meteo.com) | Vento in quota e condizioni meteorologiche attuali |
-| [BigDataCloud](https://www.bigdatacloud.com) | Geocodifica inversa |
-| [CARTO](https://carto.com) | Mappa di base, Positron / Dark Matter, basata su OpenStreetMap |
+| [Italian Civil Protection Department](https://radar.protezionecivile.it/) | Radar data, with attribution shown inside the application |
+| [Open-Meteo](https://open-meteo.com) | Steering wind and current weather conditions |
+| [BigDataCloud](https://www.bigdatacloud.com) | Reverse geocoding |
+| [CARTO](https://carto.com) | Base map, Positron / Dark Matter, based on OpenStreetMap |
 
 ---
 
-## Nota
+## Note
 
-Nembo è un **progetto personale attualmente in sviluppo**.
+Nembo is a **personal project currently in development**.
 
-L'applicazione utilizza i dati radar del Dipartimento della Protezione Civile, ma **non è affiliata, approvata o sviluppata dal Dipartimento della Protezione Civile**.
+The application uses radar data from the Italian Civil Protection Department, but is **not affiliated with, endorsed by, or developed by the Civil Protection Department**.
