@@ -112,6 +112,18 @@ function isDark(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
+/**
+ * How hard a cold start tries before it accepts a blank map.
+ *
+ * Three attempts about a second apart: long enough to outlast a connection
+ * still opening — DNS, TLS to the tile bucket, a permission prompt holding the
+ * frame — and short enough that a real outage is not spent spinning. Only the
+ * first frame ever gets them; once anything has been drawn, a null field is
+ * taken at its word.
+ */
+const COLD_RETRIES = 3;
+const COLD_RETRY_MS = 900;
+
 export default function RadarMap() {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -547,6 +559,12 @@ export default function RadarMap() {
   const wanted = useRef<{ time: number; seq: Sequence } | null>(null);
   const painting = useRef(false);
 
+  /* Whether anything has ever reached the screen, and how many times the cold
+     start has been retried. Refs, like the queue above: neither is rendered,
+     and waking React for them would re-run the effect that feeds the queue. */
+  const everPainted = useRef(false);
+  const coldRetries = useRef(0);
+
   /**
    * Renders the newest requested frame, and only that one.
    *
@@ -574,7 +592,32 @@ export default function RadarMap() {
           wanted.current = null;
 
           const field = await fieldAt(next.seq, next.time);
-          if (!field || map.current !== m) continue;
+          if (map.current !== m) continue;
+
+          /* A null field is "the observation could not be assembled", not
+             "there is nothing to draw" — an empty sky still comes back as a
+             field of zeroes. On a cold start it means the stitch lost every
+             tile at once, which is what a first load does to a connection
+             that has not warmed up yet.
+             
+             Without this the loop simply ended there: the queue was already
+             emptied, so nothing was left to wake it and the map stayed blank
+             until some unrelated state change re-ran the effect. Changing the
+             unit is exactly such a change, which is why it looked like a cure.
+
+             Bounded, and only until something has been drawn once, so a
+             genuine outage still settles into a blank map instead of retrying
+             for as long as the tab is open. */
+          if (!field) {
+            if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
+              coldRetries.current += 1;
+              wanted.current = next;
+              await new Promise<void>((r) => {
+                window.setTimeout(r, COLD_RETRY_MS);
+              });
+            }
+            continue;
+          }
 
           /* Only when it is actually missing. `getStyle()` serialises every
              layer in the basemap, and passing it as an argument meant paying
@@ -586,6 +629,9 @@ export default function RadarMap() {
 
           const src = m.getSource(RADAR_SOURCE) as ImageSource | undefined;
           if (!src) continue;
+
+          everPainted.current = true;
+          coldRetries.current = 0;
 
           if (painted) {
             /* Coordinates travel with the image: the crop moves and resizes
@@ -610,7 +656,13 @@ export default function RadarMap() {
     }
     wanted.current = { time: displayed, seq: sequence };
     void paint(m);
-  }, [displayed, sequence, mapReady, styleEpoch, paint]);
+    /* `paletteEpoch` is in here because the table the frame is painted through
+       is built by an effect, and an effect cannot be ordered against a paint
+       that is waiting on the network. If the palette lands second the frame
+       already on screen was drawn through 256 zeroes — perfectly transparent,
+       indistinguishable from clear skies, and it would sit there until
+       something else moved. */
+  }, [displayed, sequence, mapReady, styleEpoch, paletteEpoch, paint]);
 
   /* ── Theme ───────────────────────────────────────────────── */
 
