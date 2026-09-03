@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
+.env*.local
+.vercel
+
+# Copiati da node_modules a ogni predev/prebuild (scripts/copy-worker.mjs)
+public/maplibre-gl-worker.mjs
+public/maplibre-gl-shared.mjs
+
+# Configurazione locale degli strumenti di sviluppo
+.claude

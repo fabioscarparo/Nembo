@@ -1,0 +1,746 @@
+@import "tailwindcss";
+/* Into a layer on purpose. Tailwind v4 puts its utilities in @layer
+   utilities, and unlayered CSS outranks every cascade layer — so
+   maplibre-gl.css imported plainly would win, and its
+   `.maplibregl-map { position: relative }` silently beat an `absolute`
+   on the same element. The container then computes to height 0 and the
+   map renders nothing, with no error anywhere to explain it. */
+@import "maplibre-gl/dist/maplibre-gl.css" layer(base);
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Design tokens ───────────────────────────────────────────
+   Copied from fscarparo.com rather than imported: Nembo is its own repo
+   and its own deploy, and a shared package for nine colours would couple two
+   projects that have no other reason to move together. If the portfolio's
+   palette shifts, this file is a deliberate second edit. */
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --fg-soft: #333333;
+  --muted: #9a9a9a;
+  --border: #e8e8e8;
+  --surface: rgba(255, 255, 255, 0.72);
+  --hover: rgba(0, 0, 0, 0.05);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
+
+  --duration-micro: 80ms;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* The same curve traversed backwards — its control points mirrored through
+     the diagonal. Used on the way out so a dismissal reads as the entrance
+     rewound rather than as a different, hastier animation. */
+  --ease-smooth-in: cubic-bezier(0.64, 0, 0.78, 0);
+
+  --icon-swap-dur: 250ms;
+  --icon-swap-blur: 2px;
+  --icon-swap-start-scale: 0.25;
+  --icon-swap-ease: ease-in-out;
+
+  --distance-base: 8px;
+  --blur-medium: 3px;
+  /* Deeper than the portfolio's text blur on purpose: three pixels reads as
+     a soft edge, and this has to read as out of focus before it resolves. */
+  --panel-blur: 10px;
+  /* Panels leave faster than they arrive. Opening is the moment worth
+     watching — the blur resolving reads as something coming into focus — but
+     on the way out that same 350ms is just latency between deciding to
+     dismiss and the thing being gone. */
+  --panel-exit: 150ms;
+
+  /* ── Basemap ───────────────────────────────────────────────
+     Deliberately near-invisible. The radar is the only thing on this page
+     allowed to carry saturation, so the map underneath it is reduced to the
+     two things you need to place a storm: where the coast is, and which
+     region you are looking at. */
+  --map-land: #fafafa;
+  --map-water: #f2f2f2;
+  --map-line: #e4e4e4;
+  --map-label: #b0b0b0;
+
+  /* ── Radar ramp ────────────────────────────────────────────
+     The Protezione Civile's own VMI scale, transcribed from the shader their
+     viewer ships. Identical in both themes: it is designed to sit on a map,
+     not on a page, and inverting it would put us at odds with every other
+     radar an Italian reader has ever looked at.
+
+     Read by buildLut() in lib/colormap.ts, which maps them onto each
+     product's thresholds. Recolouring the radar means editing these seven
+     values and nothing else. */
+  --ramp-1: #878787;
+  --ramp-2: #00fafa;
+  --ramp-3: #00fafa;
+  --ramp-4: #00fa00;
+  --ramp-5: #fafa00;
+  --ramp-6: #fa6400;
+  --ramp-7: #fa0000;
+
+  /* The stops carry their own alpha, so the layer itself stays fully opaque
+     — pulling it back here would wash out the scale twice. */
+  --radar-opacity: 1;
+
+  /* Your position. Blue on purpose: it is the one hue on this map that never
+     means precipitation, so it cannot be misread as weather at a glance.
+     iOS system blue, which is the convention every map reader already has. */
+  --pin: #007aff;
+  --pin-halo: rgba(0, 122, 255, 0.16);
+  /* One frame of the animated loop. Five real minutes per tick. */
+  --frame-dur: 90ms;
+}
+
+.dark {
+  --bg: #0c0c0c;
+  --fg: #ededed;
+  --fg-soft: #c4c4c4;
+  --muted: #6f6f6f;
+  --border: #222222;
+  --surface: rgba(26, 26, 26, 0.72);
+  --hover: rgba(255, 255, 255, 0.08);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  --map-land: #101010;
+  --map-water: #0a0a0a;
+  --map-line: #242424;
+  --map-label: #4a4a4a;
+
+  --pin: #0a84ff;
+  --pin-halo: rgba(10, 132, 255, 0.22);
+
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-fg-soft: var(--fg-soft);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-surface: var(--surface);
+  --color-hover: var(--hover);
+
+  --font-sans:
+    var(--font-satoshi), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    system-ui, sans-serif;
+}
+
+/* ── Base ────────────────────────────────────────────────────
+   A map fills the viewport and owns its own gestures, so the document must
+   not scroll or rubber-band underneath it. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Dock ────────────────────────────────────────────────────
+   Same floating surface as the portfolio's. Every control the radar has
+   lives in one of these, rather than scattered into the four corners the way
+   map UIs usually go. */
+.dock-surface {
+  background: rgba(255, 255, 255, 0.75);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 2px 4px rgba(0, 0, 0, 0.02),
+    0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  transition:
+    background-color var(--duration-medium),
+    box-shadow var(--duration-medium);
+}
+
+.dark .dock-surface {
+  background: rgba(26, 26, 26, 0.75);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 2px 4px rgba(0, 0, 0, 0.2),
+    0 0 0 0.5px rgba(255, 255, 255, 0.1);
+}
+
+.dock-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 9999px;
+}
+
+.dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  /* Was #555. The stroked icons read noticeably lighter than the filled ones
+     at 16px, and the whole row looked half-disabled; matching the body's own
+     soft ink evens them out. */
+  color: var(--fg-soft);
+  transition: color var(--duration-fast) var(--ease-smooth-out);
+}
+
+.dark .dock-btn {
+  color: var(--fg-soft);
+}
+
+@media (hover: hover) {
+  .dock-btn:hover {
+    color: var(--fg);
+  }
+}
+
+/* A dock button at the timeline's own height, for the one that sits beside it
+   in a pill of its own.
+   
+   Declared here rather than with `h-11 w-11` on the element because
+   `.dock-btn` sets its size in unlayered CSS, and unlayered rules beat every
+   Tailwind utility — those classes were on the button and being ignored. The
+   same cascade-layer trap as maplibre-gl.css earlier in this project. */
+.dock-btn-lg {
+  width: 44px;
+  height: 44px;
+}
+
+/* Timestamps and dBZ readouts sit in the same tabular figures as the
+   portfolio's date column, so a scrubbing timeline does not reflow. */
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    /* The loop never plays itself; the scrubber still works by hand. */
+    --frame-dur: 0ms;
+  }
+}
+
+/* The location dot, in the shape mapcn uses for its markers: a filled circle
+   inside a white ring, lifted off the map by a shadow.
+
+   The ring stays white in both themes rather than following --bg. It is not
+   decoration — it is what separates the dot from whatever is underneath, and
+   on a dark basemap a dark ring would merge the two. Every map that draws
+   "you are here" does the same, which also means it is the shape people
+   already read without being told. */
+.pin-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--pin);
+  border: 2px solid #fff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+/* A soft halo, sized generously rather than to the reported accuracy. The
+   number the browser gives is a 95% confidence radius that swings between a
+   GPS fix and a wifi guess, and drawing it faithfully makes the dot breathe
+   in and out. This says "roughly here" without claiming a precision. */
+.pin-halo {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--pin-halo);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pin-halo {
+    animation: pin-pulse 2.4s var(--ease-smooth-out) infinite;
+  }
+}
+
+@keyframes pin-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 0.45;
+  }
+}
+
+/* ── Tick slider ─────────────────────────────────────────────
+   A native range input with a decorative ruler laid over it. The ticks take
+   no pointer events, so every gesture — drag, click on the track, arrow keys,
+   touch — is the browser's own and behaves the way the platform says it
+   should. Only the appearance is ours. */
+.tick-slider {
+  /* The height a tick jumps to, and the height of the thumb: the two match,
+     so a mark the thumb crosses briefly stands as tall as the thumb itself
+     before falling back. */
+  --tick-active-height: 22px;
+  --tick-rest-height: 6px;
+  --tick-rest-opacity: 0.28;
+
+  position: relative;
+  height: 28px;
+}
+
+.tick-marks {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 100%;
+  pointer-events: none;
+}
+
+.tick-marks span {
+  width: 1px;
+  height: var(--tick-rest-height);
+  border-radius: 999px;
+  background: var(--fg);
+  opacity: var(--tick-rest-opacity);
+  flex: none;
+  will-change: height, opacity;
+}
+
+.tick-marks span.is-step {
+  --tick-rest-height: 11px;
+  --tick-rest-opacity: 0.55;
+  width: 2px;
+}
+
+/* Everything past the present, in the colour the readout already uses for
+   "+30′". The axis then says which half you are in without being read: one
+   side is measured, the other is computed. */
+.tick-marks span.is-ahead {
+  background: var(--ramp-6);
+}
+
+/* The wake. A mark the thumb has just crossed snaps to full height, holds for
+   a couple of frames, then falls back to rest. Held briefly at the top rather
+   than reversing immediately — without that pause the jump reads as a flicker
+   instead of as something struck. */
+.tick-marks span.is-pulsing {
+  animation: tick-fall 0.32s cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+
+@keyframes tick-fall {
+  0%,
+  7% {
+    height: var(--tick-active-height);
+    opacity: 0.86;
+  }
+  to {
+    height: var(--tick-rest-height);
+    opacity: var(--tick-rest-opacity);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tick-marks span.is-pulsing {
+    animation: none;
+  }
+}
+
+/* The present: the boundary between the two halves.
+   
+   Neutral rather than orange now that orange means "ahead" — an orange mark
+   sitting at the head of a run of orange ticks would dissolve into them. It
+   stays the tallest and thickest thing on the ruler, which is what makes it
+   findable. */
+.tick-now {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 16px;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--fg);
+  pointer-events: none;
+}
+
+.tick-slider input[type="range"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: grab;
+}
+
+.tick-slider input[type="range"]:active {
+  cursor: grabbing;
+}
+
+.tick-slider input[type="range"]:focus-visible {
+  outline: none;
+}
+
+.tick-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+
+.tick-slider input[type="range"]::-moz-range-track {
+  height: 100%;
+  background: transparent;
+}
+
+/* A bar, not a knob: it has to read as a position on a ruler rather than as
+   a handle sitting on top of one. */
+.tick-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 3px;
+  height: var(--tick-active-height);
+  border-radius: 2px;
+  background: var(--fg);
+  border: none;
+}
+
+.tick-slider input[type="range"]::-moz-range-thumb {
+  width: 3px;
+  height: var(--tick-active-height);
+  border-radius: 2px;
+  background: var(--fg);
+  border: none;
+}
+
+.tick-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--fg);
+}
+
+.tick-slider input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--fg);
+}
+
+/* ── Legend ──────────────────────────────────────────────────
+   A checkerboard behind the scale. The low end of the DPC palette is fully
+   transparent — that is how clear air is drawn — and over a flat backing it
+   would read as a solid colour rather than as nothing at all. */
+.legend-bar {
+  padding: 2px;
+  border-radius: 999px;
+  background-image:
+    linear-gradient(45deg, var(--hover) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--hover) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--hover) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--hover) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+
+/* The attribution sits straight on the map, with no surface behind it, so
+   wherever the basemap puts a place name the two collide and neither is
+   readable. A halo in the page's own background colour separates it without
+   adding another box to a screen that already has three. */
+.on-map {
+  text-shadow:
+    0 0 3px var(--bg),
+    0 0 3px var(--bg),
+    0 0 6px var(--bg);
+}
+
+/* ── Dock panels ─────────────────────────────────────────────
+   Arrives out of focus and resolves, the way something does when your eye
+   finds it. Blur and scale move together because that is what focusing looks
+   like optically — a lens pulling in is never only one of the two.
+
+   Kept mounted rather than conditionally rendered, so the same transition
+   runs in reverse on the way out; a panel that animates in and then vanishes
+   in a single frame reads as a bug. `visibility` carries the closed state so
+   it leaves the tab order and the accessibility tree, and is switched with a
+   delay on the way out so it waits for the fade rather than cutting it. */
+.dock-panel {
+  opacity: 0;
+  visibility: hidden;
+  filter: blur(var(--panel-blur));
+  transform: translateY(calc(var(--distance-base) * -1)) scale(0.97);
+  transform-origin: top right;
+  /* This block is the exit: it is what the element transitions *to* when
+     `data-open` goes away. Hence the shorter duration here and the longer one
+     below — and the visibility delay has to track it, or the panel would go
+     untabbable while still visibly fading. */
+  transition:
+    opacity var(--panel-exit) var(--ease-smooth-in),
+    filter var(--panel-exit) var(--ease-smooth-in),
+    transform var(--panel-exit) var(--ease-smooth-in),
+    visibility 0s linear var(--panel-exit);
+}
+
+.dock-panel[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+  filter: blur(0);
+  transform: none;
+  transition:
+    opacity var(--duration-medium) var(--ease-smooth-out),
+    filter var(--duration-medium) var(--ease-smooth-out),
+    transform var(--duration-medium) var(--ease-smooth-out),
+    visibility 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-panel,
+  .dock-panel[data-open="true"] {
+    filter: none;
+    transform: none;
+    transition:
+      opacity var(--duration-quick) linear,
+      visibility 0s linear var(--duration-quick);
+  }
+
+  .dock-panel[data-open="true"] {
+    transition:
+      opacity var(--duration-quick) linear,
+      visibility 0s;
+  }
+}
+
+/* ── Icon swap ───────────────────────────────────────────────
+   Ported from the portfolio, tokens and all. Every icon in the stack is
+   rendered and sits in the same grid cell; the one the state names fades up
+   from small and blurred while the other fades down. Both move at once, so
+   the change reads as one icon becoming another rather than as a substitution
+   — which is exactly what a hard swap looks like, and why it felt abrupt.
+
+   CSS cannot compare two attributes, so the pairs are enumerated. That is how
+   the portfolio does it too. */
+.t-icon-swap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+
+.t-icon-swap .t-icon {
+  grid-area: 1 / 1;
+  opacity: 0;
+  filter: blur(var(--icon-swap-blur));
+  transform: scale(var(--icon-swap-start-scale));
+  transition:
+    opacity var(--icon-swap-dur) var(--icon-swap-ease),
+    filter var(--icon-swap-dur) var(--icon-swap-ease),
+    transform var(--icon-swap-dur) var(--icon-swap-ease);
+}
+
+.t-icon-swap[data-state="play"] .t-icon[data-icon="play"],
+.t-icon-swap[data-state="stop"] .t-icon[data-icon="stop"],
+.t-icon-swap[data-state="on"] .t-icon[data-icon="on"],
+.t-icon-swap[data-state="off"] .t-icon[data-icon="off"],
+.t-icon-swap[data-state="system"] .t-icon[data-icon="system"],
+.t-icon-swap[data-state="light"] .t-icon[data-icon="light"],
+.t-icon-swap[data-state="dark"] .t-icon[data-icon="dark"] {
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-icon-swap .t-icon {
+    transition: none;
+  }
+}
+
+/* The map canvas keeps its focus ring for the keyboard and loses it for the
+   mouse. Unlayered on purpose: maplibre-gl.css sits in `base`, and this has
+   to win. See the modality tracking in RadarMap for why `:focus-visible` is
+   not enough on its own — the canvas is viewport-sized, so its ring reads as
+   a border around the page rather than as a focus indicator. */
+:root[data-focus="pointer"] .maplibregl-canvas:focus,
+:root[data-focus="pointer"] .maplibregl-canvas:focus-visible {
+  outline: none;
+}
+
+/* ── Toggle ──────────────────────────────────────────────────
+   Thumb travel from Transitions.dev's "toggle": the thumb overshoots the end,
+   swings back and settles, on its own clock rather than the track's. Only the
+   motion is theirs; the track, the thumb and the colours are this project's
+   tokens.
+
+   The travel has to match the geometry exactly or the thumb stops short of
+   the end or runs past it: track 36, thumb 16, 2 of padding a side, so it
+   moves 36 - 16 - 4 = 16.
+
+   @see https://transitions.dev/detail.html?t=toggle */
+.t-toggle {
+  --toggle-dur: 350ms;
+  --toggle-travel: 16px;
+  --toggle-ov1: 1px;
+  --toggle-ov2: 0px;
+  --toggle-ease: cubic-bezier(0.34, 1.35, 0.64, 1);
+
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-smooth-out);
+}
+
+.t-toggle[data-on="true"] {
+  background: var(--fg);
+}
+
+.t-toggle-thumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg);
+  /* The same trick the location dot uses: a shadow rather than a border, so
+     the thumb separates from the track in either theme and in either state,
+     where a single flat colour cannot. */
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  translate: 0 0;
+  will-change: translate;
+}
+
+.t-toggle[data-on="true"] .t-toggle-thumb {
+  translate: var(--toggle-travel) 0;
+}
+
+/* `.is-init` is added on the first interaction, so the "off" keyframes cannot
+   play on mount — otherwise every load would animate the thumb from a state
+   it was never in. */
+.t-toggle.is-init[data-on="true"] .t-toggle-thumb {
+  animation: t-toggle-on var(--toggle-dur) var(--toggle-ease) both;
+}
+
+.t-toggle.is-init[data-on="false"] .t-toggle-thumb {
+  animation: t-toggle-off var(--toggle-dur) var(--toggle-ease) both;
+}
+
+@keyframes t-toggle-on {
+  0% { translate: 0 0; }
+  55% { translate: calc(var(--toggle-travel) + var(--toggle-ov1)) 0; }
+  80% { translate: calc(var(--toggle-travel) - var(--toggle-ov2)) 0; }
+  100% { translate: var(--toggle-travel) 0; }
+}
+
+@keyframes t-toggle-off {
+  0% { translate: var(--toggle-travel) 0; }
+  55% { translate: calc(0px - var(--toggle-ov1)) 0; }
+  80% { translate: var(--toggle-ov2) 0; }
+  100% { translate: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-toggle-thumb {
+    animation: none !important;
+  }
+}
+
+/* ── Sliding tabs ────────────────────────────────────────────
+   From Transitions.dev's "tabs sliding": one pill moves and resizes between
+   the measured positions of the options, so the choice reads as a single
+   thing travelling rather than three things lighting up in turn.
+
+   The pill's width and offset are written inline by the component, because
+   only layout knows them — see Settings.tsx for the measurement, and for why
+   the first paint is written without a transition.
+
+   @see https://transitions.dev/detail.html?t=tabs-sliding */
+.t-tabs {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--hover);
+}
+
+.t-tab {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-smooth-out);
+}
+
+/* Equal thirds, for a set whose labels are words of unequal length and which
+   would otherwise look ragged. The dock's units are not this: "dBZ", "mm/h"
+   and "mm" want their natural widths, because forcing them equal leaves the
+   short one swimming in space it does not need. */
+.t-tabs-fill .t-tab {
+  flex: 1;
+  padding: 0;
+}
+
+.t-tab[aria-selected="true"] {
+  color: var(--fg);
+}
+
+@media (hover: hover) {
+  .t-tab:not([aria-selected="true"]):hover {
+    color: var(--fg-soft);
+  }
+}
+
+.t-tabs-pill {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  z-index: 0;
+  height: 24px;
+  width: 0;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  transform: translateX(0);
+  transition:
+    transform var(--duration-fast) var(--ease-smooth-out),
+    width var(--duration-fast) var(--ease-smooth-out);
+  will-change: transform, width;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-tabs-pill,
+  .t-tab {
+    transition: none !important;
+  }
+}
+
+/* In the dock the track is the dock: the frosted pill around it is already a
+   container, and nesting a second filled one inside it reads as a box in a
+   box. So the track goes transparent and loses its padding — the dock's own
+   4px is doing that job — and the travelling pill picks up the hover tint
+   instead of the page background, which on a translucent surface is what
+   makes a selection look selected rather than punched through. */
+.dock-tabs {
+  padding: 0;
+  background: transparent;
+}
+
+.dock-tabs .t-tabs-pill {
+  top: 0;
+  background: var(--hover);
+  box-shadow: none;
+}
+
+.dock-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  flex: none;
+  background: var(--border);
+}

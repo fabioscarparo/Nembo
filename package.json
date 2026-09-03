@@ -1,0 +1,34 @@
+{
+  "name": "nembo",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/copy-worker.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/copy-worker.mjs",
+    "build": "next build",
+    "start": "next start",
+    "basemap": "node scripts/build-basemap.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@web-kits/audio": "^0.1.0",
+    "maplibre-gl": "^6.6.0",
+    "next": "^16.3.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "reicon-react": "^1.2.0",
+    "torph": "^0.1.0",
+    "web-haptics": "^0.0.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2"
+  }
+}
