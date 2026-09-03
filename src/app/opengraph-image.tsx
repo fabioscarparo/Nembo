@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { ImageResponse } from "next/og";
 
 /**
@@ -23,6 +26,14 @@ export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 export const alt = "Nembo — Radar Meteorologico Italiano";
 
+/* Satori resolves no network requests and no bundler aliases, so the mark has
+   to arrive as bytes. Read from the source tree at build time and inlined,
+   which also keeps the card a single self-contained file. `assets/` holds the
+   512px original; `src/app/icon.png` is half that and would soften at the size
+   drawn below. */
+const MARK = readFileSync(join(process.cwd(), "assets", "nembo.png"));
+const MARK_SRC = `data:image/png;base64,${MARK.toString("base64")}`;
+
 export default function OpengraphImage() {
   return new ImageResponse(
     (
@@ -34,14 +45,23 @@ export default function OpengraphImage() {
           flexDirection: "column",
           justifyContent: "center",
           padding: "0 96px",
-          /* The icon's own palette: deep navy at the edges lifting to a pale
-             centre, which is what the mark itself does. */
+          /* Deliberately close to flat. The mark is itself a soft radial glow,
+             so the radial gradient this card used to carry would have put a
+             glow on a glow and dissolved the icon's edges into the background.
+             A dark, directional wash leaves the mark as the only light source. */
           backgroundColor: "#0d2233",
-          backgroundImage:
-            "radial-gradient(circle at 72% 38%, #6f9ab5 0%, #2c536f 34%, #0d2233 68%)",
+          backgroundImage: "linear-gradient(160deg, #143349 0%, #0a1826 100%)",
           color: "#ffffff",
         }}
       >
+        <img
+          src={MARK_SRC}
+          width={132}
+          height={132}
+          alt=""
+          style={{ marginBottom: 36 }}
+        />
+
         <div
           style={{
             fontSize: 132,
@@ -59,20 +79,13 @@ export default function OpengraphImage() {
             fontSize: 42,
             lineHeight: 1.3,
             color: "rgba(255, 255, 255, 0.82)",
-            maxWidth: 900,
+            /* Narrower than the text needs, to force the break after
+               "italiano". Left to the full column the line wraps one word
+               short of the edge and orphans "minuti" on its own row. */
+            maxWidth: 640,
           }}
         >
           Radar meteorologico italiano con nowcasting a 30 minuti
-        </div>
-
-        <div
-          style={{
-            marginTop: 44,
-            fontSize: 28,
-            color: "rgba(255, 255, 255, 0.55)",
-          }}
-        >
-          Dati del Dipartimento della Protezione Civile
         </div>
       </div>
     ),
