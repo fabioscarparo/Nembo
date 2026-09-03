@@ -47,15 +47,16 @@ import { currentLut, lutEpoch, setLut } from "@/lib/tiles";
 import { debugRequested, trace, tracingPaint } from "@/lib/trace";
 import TracePanel from "./TracePanel";
 import {
+  buildSequence,
   COMPOSITE_BOUNDS,
   DOMAIN,
   HISTORY_MIN,
   HORIZON_MIN,
+  paintAt,
+  shareLut,
+  shareMotion,
   STEP_MS,
   type Sequence,
-  buildSequence,
-  fieldAt,
-  renderField,
 } from "@/lib/nowcast";
 import { type Steering, fetchSteering } from "@/lib/wind";
 import { usePageVisible, useVisibleInterval } from "@/lib/visibility";
@@ -241,12 +242,9 @@ export default function RadarMap() {
     setPlaying(next);
   }, [playing, haptics, sound]);
 
-  /* Back to the present. `null` is how "follow live" is spelled — see
-     `displayed` — so this is a return to the default rather than a jump to a
-     particular minute, and a new observation arriving afterwards keeps the
-     thumb on it instead of stranding it one frame behind. Playback stops for
-     the same reason scrubbing does: the loop would walk straight off the
-     instant that was just asked for. */
+  /* `null` is "follow live" — see `displayed` — so a later observation keeps
+     the thumb on the present rather than stranding it one frame behind.
+     Playback stops for the same reason scrubbing stops it. */
   const showNow = useCallback(() => {
     haptics.tap();
     sound.slide();
@@ -368,6 +366,8 @@ export default function RadarMap() {
   const refreshPalette = useCallback(() => {
     const stops = RAMPS[product];
     if (stops) setLut(buildLut(PRODUCTS[product], stops));
+    // The worker keeps its own copy; a stale one paints the wrong colours.
+    shareLut(currentLut());
     setPaletteEpoch(lutEpoch());
   }, [product]);
 
@@ -499,12 +499,10 @@ export default function RadarMap() {
       /* Closes a race: the style can finish parsing between the constructor
          and the handler attached to it a few lines up. */
       trace("map.created", { alreadyLoaded: m.isStyleLoaded() });
-      /* Opened here rather than from `style.load`. The layer is already in the
-         style this map was constructed from, so there is nothing left to wait
-         for — and waiting was the bug: the event is withheld until sprite and
-         glyphs land, and never arrives at all while the page is not rendering.
-         The handler above still runs, and is still needed for the theme swap;
-         it just no longer decides when the radar may first be drawn. */
+      /* Not from `style.load`: that event waits on sprite and glyphs, and
+         never fires while the page is not rendering. The layer is already in
+         the style this map was constructed from. The handler above still runs
+         for the theme swap. */
       setStyleEpoch((n) => n + 1);
     })();
 
@@ -578,19 +576,14 @@ export default function RadarMap() {
     if (latest === null) return;
     let cancelled = false;
 
-    /* No AbortController any more. The tile fetches under this are shared with
-       every other caller for the same instant, so cancelling them on cleanup
-       cancelled work the *next* run was about to wait on. `cancelled` is the
-       whole of what this needs: ignore a result that arrived too late, and
-       leave the fetch to finish into the cache. */
+    /* No AbortController: the tile fetches are shared with every caller for
+       the same instant, so cancelling on cleanup cancelled work the next run
+       was about to await. `cancelled` only discards a late result. */
     trace("seq.start", { product, latest, steering: steering ? "yes" : "no" });
     let again = 0;
 
-    /* A null result is not a state React can see: `sequence` is already null,
-       so nothing re-renders, no effect re-runs and nothing ever tries again.
-       That silence is what left the map empty until the unit switcher was
-       poked enough times to change the cache key by hand. Retried on a timer
-       instead, a bounded number of times. */
+    /* setSequence(null) on an already-null state is not a change React can
+       see: nothing re-renders and nothing retries. Hence the timer. */
     const retry = () => {
       if (cancelled || seqAttempts.current >= SEQ_RETRIES) return;
       seqAttempts.current += 1;
@@ -605,6 +598,8 @@ export default function RadarMap() {
       .then((s) => {
         trace("seq.ok", { cancelled, got: s ? "seq" : "NULL", source: s?.source ?? "-" });
         if (cancelled) return;
+        // 286KB. Once per sequence.
+        if (s) shareMotion(s.motion);
         setSequence(s);
         if (s) seqAttempts.current = 0;
         else retry();
@@ -689,42 +684,31 @@ export default function RadarMap() {
           if (!next) break;
           wanted.current = null;
 
-          const field = await fieldAt(next.seq, next.time);
+          const frame = await paintAt(next.seq, next.time, currentLut());
           if (map.current !== m) continue;
 
-          /* One line per decision, only for the first frames. See lib/trace.ts:
-             every branch below ends as an empty map, and on a phone they are
-             indistinguishable without this. */
+          /* Every branch below ends as an empty map. See lib/trace.ts. */
           const watching = tracingPaint();
           if (watching) {
             const lut = currentLut();
             let opaque = 0;
             for (let i = 3; i < lut.length; i += 4) if (lut[i] > 0) opaque += 1;
             trace("field", {
-              ok: field ? "yes" : "NULL",
-              box: field?.box
-                ? `${field.box.x1 - field.box.x0 + 1}x${field.box.y1 - field.box.y0 + 1}`
+              ok: frame ? "yes" : "NULL",
+              painted: frame?.painted
+                ? `${frame.painted.image.width}x${frame.painted.image.height}`
                 : "none",
               lutOpaque: opaque,
               retries: coldRetries.current,
             });
           }
 
-          /* A null field is "the observation could not be assembled", not
-             "there is nothing to draw" — an empty sky still comes back as a
-             field of zeroes. On a cold start it means the stitch lost every
-             tile at once, which is what a first load does to a connection
-             that has not warmed up yet.
-             
-             Without this the loop simply ended there: the queue was already
-             emptied, so nothing was left to wake it and the map stayed blank
-             until some unrelated state change re-ran the effect. Changing the
-             unit is exactly such a change, which is why it looked like a cure.
-
-             Bounded, and only until something has been drawn once, so a
-             genuine outage still settles into a blank map instead of retrying
-             for as long as the tab is open. */
-          if (!field) {
+          /* null means the stitch lost every tile, not that the sky is clear
+             — an empty sky is a field of zeroes. The queue is already drained
+             at this point, so without a re-queue nothing wakes the loop and
+             the map stays blank until an unrelated state change. Bounded, and
+             only before the first successful draw. */
+          if (!frame) {
             if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
               coldRetries.current += 1;
               wanted.current = next;
@@ -740,8 +724,7 @@ export default function RadarMap() {
              for that on every frame to call a function that returns
              immediately. */
           if (!m.getLayer(RADAR_LAYER)) applyRadar(m, m.getStyle());
-          const painted = await renderField(field);
-          if (map.current !== m) continue;
+          const painted = frame.painted;
 
           const src = m.getSource(RADAR_SOURCE) as ImageSource | undefined;
           if (watching) {
@@ -754,11 +737,8 @@ export default function RadarMap() {
                 : "-",
             });
           }
-          /* Re-queued, not dropped. The source arrives with the style, but the
-             style is parsed on MapLibre's own schedule, and the loop has
-             already emptied the queue by this point — so a frame abandoned
-             here leaves nothing behind to draw it later. This is the same
-             dead end the null-field branch above had. */
+          /* The source arrives with the style, which MapLibre parses on its
+             own schedule. Same drained-queue dead end as the branch above. */
           if (!src) {
             if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
               coldRetries.current += 1;
@@ -770,10 +750,8 @@ export default function RadarMap() {
             continue;
           }
 
-          /* Guarded because MapLibre throws from here if the style behind the
-             source is not ready yet, and an exception escaping this loop takes
-             the whole pump with it — queue already emptied, nothing left to
-             restart it. The third silent dead end on this path. */
+          /* MapLibre throws here if the style is not ready. An exception
+             escaping the loop kills the pump with the queue drained. */
           try {
             if (painted) {
               /* Coordinates travel with the image: the crop moves and resizes
@@ -807,9 +785,7 @@ export default function RadarMap() {
   useEffect(() => {
     const m = map.current;
     if (!m || !sequence || displayed === null || !mapReady || styleEpoch === 0) {
-      /* Traced as well as returned. "The paint never ran" and "the paint ran
-         and drew nothing" look identical on screen and have nothing in common
-         underneath, so the gate has to say which one happened. */
+      /* "Never ran" and "ran and drew nothing" look identical on screen. */
       trace("gate", {
         map: m ? "yes" : "no",
         seq: sequence ? "yes" : "no",
@@ -1049,13 +1025,8 @@ export default function RadarMap() {
   const locate = useCallback(() => {
     const m = map.current;
 
-    /* The work first, the feedback after it.
-    
-       Both calls below are decorative, and both used to run before any of
-       this. That put a sound and a motor on the path to the only thing the
-       button is for: anything either of them threw would return from the
-       handler with the watch never started, and the button would look dead
-       for a reason that has nothing to do with geolocation. */
+    /* Work first, feedback after: a throw from either call used to return
+       from the handler with the watch never started. */
     if (position && m) {
       m.flyTo({ center: position, zoom: 8, duration: 900 });
     } else {

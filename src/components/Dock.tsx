@@ -3,15 +3,9 @@
 /**
  * The quantity on screen, and the legend that explains it.
  *
- * The gear used to sit here too, behind a hairline that was apologising for
- * the grouping: one pill held a control that changes what the radar measures
- * and two that open panels. It has gone down to the timeline's row, where the
- * things you press live. The legend stayed because it is about what is on
- * screen right now — the same subject as the tabs beside it — and because it
- * is the panel you open while reading the map rather than while setting it up.
- *
- * Two pills, not one. The divider is gone with the thing it was separating:
- * a gap says the same and says it more quietly.
+ * The gear moved to the timeline's row. The legend stayed: it is about what
+ * the tabs beside it select. Two pills rather than one — the divider went with
+ * the thing it separated.
  *
  * Memoised, because it is rebuilt by every step of a scrub otherwise: dragging
  * the slider re-renders RadarMap, and these buttons and their icons have
@@ -80,8 +74,7 @@ function DockControls({
         />
       </div>
 
-      {/* Its own pill, at the same diameter as every round button on the map.
-          Inside the tabs' pill it would have read as a fourth quantity. */}
+      {/* Its own pill: inside the tabs' it would read as a fourth quantity. */}
       <button
         type="button"
         onClick={onToggleLegend}

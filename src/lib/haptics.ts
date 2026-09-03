@@ -67,14 +67,10 @@ export function setHaptics(next: boolean): void {
  * keystroke of a drag, and with it the buttons holding them.
  */
 /**
- * Runs a trigger, or does not, and never lets the attempt escape.
+ * Fires a trigger without letting a failure escape.
  *
- * Every handler in the app opens with a call for feedback and does its real
- * work afterwards, so anything thrown here would take the action with it — a
- * button that buzzes on nothing at all is a small bug, and a locate button
- * that does nothing because the motor threw is not. `sound.ts` has swallowed
- * its own failures from the start for the same reason; this is the half that
- * was missing.
+ * Handlers call for feedback before doing their work, so a throw here takes
+ * the action with it. sound.ts has swallowed its own failures from the start.
  */
 function fire(run: () => unknown): void {
   if (!enabled) return;
@@ -99,14 +95,8 @@ export function useHaptics() {
       select: () => {
         fire(() => trigger("selection"));
       },
-      /**
-       * Any plain button press.
-       *
-       * A custom pulse rather than the `light` preset: that one is 15 ms, and
-       * every control in this app is a discrete press next to a timeline that
-       * already buzzes continuously while it scrubs. 10 ms at the preset's own
-       * intensity keeps the two apart — a button is felt, not answered.
-       */
+      /** Any plain button press. 10ms at `light`'s own intensity — the preset
+       *  is 15, which sat too close to the timeline's continuous detents. */
       tap: () => {
         fire(() => trigger([{ duration: 10, intensity: 0.4 }]));
       },

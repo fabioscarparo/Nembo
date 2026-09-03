@@ -72,16 +72,10 @@ function Pill({ place }: { place: Place | null }) {
 
   return (
     <div className="pointer-events-auto min-w-0">
-      {/* Two lines inside the same 44px. Sharing one line, the name and the
-          reading competed for a width neither could give up: a long comune was
-          cut to a third of itself while the temperature beside it sat
-          untouched. Stacked, the name has the pill to itself and the reading
-          sits under it in smaller type — which is also the order you read them
-          in: where you are, then what it is doing there.
-
-          The second line is what makes the description affordable on a phone.
-          It used to be dropped below `sm` because it cost the most width for
-          the least meaning; on a line of its own it costs the name nothing. */}
+      {/* Two lines in the same 44px. Sharing one, a long comune was truncated
+          to a third while the temperature beside it stayed intact. Stacked,
+          the name has the pill's width to itself — which also affords the
+          description on a phone, where it used to be dropped. */}
       <div className="dock-surface flex h-11 min-w-0 flex-col justify-center gap-[3px] rounded-full px-4">
         {/* The first thing to give up space, because a shortened town name is
             still the town you are in. min-w-0 is what lets a flex item shrink

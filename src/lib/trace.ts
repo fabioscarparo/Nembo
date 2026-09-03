@@ -1,23 +1,18 @@
 "use client";
 
 /**
- * A record of what the first few frames did, kept so a failure that only
- * happens on a cold start can be read after the fact.
+ * What the first frames did, kept so a cold-start failure can be read after
+ * the fact.
  *
- * It exists because the interesting bug is unreachable from a desktop: the
- * paint path makes half a dozen decisions — is there a field, is the palette
- * built, does the layer exist, did the crop come back empty — and every one of
- * them fails the same way on screen, as a map with no weather on it. On a
- * phone there is no console to tell them apart.
+ * The paint path makes half a dozen decisions and every one fails the same way
+ * on screen: a map with no weather on it. On a phone there is no console to
+ * tell them apart.
  *
- * So the trace is written to storage as it happens, and the session that reads
- * it is not the session that wrote it: launch the app, watch it fail, then open
- * it again with `?debug=1` and read what the previous launch recorded.
+ * Written to storage as it happens and read by a later session: launch, watch
+ * it fail, reopen with `?debug=1`.
  *
- * Bounded on both ends. Only the first frames are recorded — a scrub emits one
- * paint every few milliseconds and tracing those would cost more than it
- * explains — and the buffer is capped, so a session that somehow keeps writing
- * cannot fill the origin's storage quota.
+ * Bounded at both ends — MAX_PAINTS and MAX_LINES — so a scrub cannot fill the
+ * origin's quota.
  */
 
 /** Where the trace lives between sessions. */

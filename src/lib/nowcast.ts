@@ -41,6 +41,20 @@ import {
   lonAt,
 } from "./grid";
 import {
+  type Box,
+  type Corners,
+  type Field,
+  type Painted,
+  blend,
+  clampBox,
+  SCRATCH,
+  compose,
+  renderField,
+  signalBox,
+  unionBox,
+  warp,
+} from "./field";
+import {
   type Coarse,
   type Motion,
   type MotionSource,
@@ -52,73 +66,13 @@ import {
 
 export { COMPOSITE_BOUNDS, DOMAIN } from "./grid";
 export type { Motion, MotionSource } from "./flow";
+export type { Box, Corners, Field, Painted } from "./field";
+export { renderField } from "./field";
 
-/** Pixel bounds, inclusive, of the region worth touching. */
-export type Box = { x0: number; y0: number; x1: number; y1: number };
 
-/**
- * A composite, plus the box its echo lives in.
- *
- * Everything outside that box is either no-data or below the palette's first
- * stop, which the DPC ramp draws at zero alpha — so skipping it is invisible,
- * not an approximation. It is also what makes a full-resolution grid
- * tractable: the box is usually a few per cent of the field.
- */
-export type Field = { value: Uint8Array; mask: Uint8Array; box: Box | null };
 
-/**
- * The tightest rectangle containing every pixel worth drawing, or null when
- * there is none.
- *
- * This one scan is what makes a full-resolution grid affordable: every
- * operation downstream — warping, blending, painting, uploading — is confined
- * to the box, and on a typical day the box is a few per cent of the field.
- * It costs one pass over 2.29 M pixels per observation, which is paid once
- * and saves that much work many times over.
- */
-function signalBox(value: Uint8Array, mask: Uint8Array): Box | null {
-  let x0 = W, y0 = H, x1 = -1, y1 = -1;
-  for (let y = 0; y < H; y++) {
-    const row = y * W;
-    for (let x = 0; x < W; x++) {
-      const i = row + x;
-      if (!mask[i] || value[i] < SIGNAL_FLOOR) continue;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-    }
-  }
-  return x1 < 0 ? null : { x0, y0, x1, y1 };
-}
 
-/**
- * Grows a box by `pad` on every side and clips it to the grid.
- *
- * Rounded outward — floor on the near edges, ceil on the far ones — so the
- * padding can only ever be generous. A box that is one pixel too small drops
- * echo silently; one pixel too large costs a row.
- */
-function clampBox(b: Box, pad: number): Box {
-  return {
-    x0: Math.max(0, Math.floor(b.x0 - pad)),
-    y0: Math.max(0, Math.floor(b.y0 - pad)),
-    x1: Math.min(W - 1, Math.ceil(b.x1 + pad)),
-    y1: Math.min(H - 1, Math.ceil(b.y1 + pad)),
-  };
-}
 
-/** The smallest box containing both, treating null as "nothing here". */
-function unionBox(a: Box | null, b: Box | null): Box | null {
-  if (!a) return b;
-  if (!b) return a;
-  return {
-    x0: Math.min(a.x0, b.x0),
-    y0: Math.min(a.y0, b.y0),
-    x1: Math.max(a.x1, b.x1),
-    y1: Math.max(a.y1, b.y1),
-  };
-}
 
 /* ── Timeline shape ─────────────────────────────────────────
  * Thirty minutes either side of now, a frame a minute — the window 3BMeteo
@@ -168,6 +122,15 @@ const inFlight = new Map<string, Promise<Field | null>>();
  */
 function remember(cacheKey: string, field: Field) {
   observations.set(cacheKey, field);
+  /* Pushed on arrival (~5 min), not per frame. Cloned rather than
+     transferred: the motion estimate and the inline fallback still read it. */
+  renderPost({
+    k: "obs",
+    key: cacheKey,
+    value: field.value,
+    mask: field.mask,
+    box: field.box,
+  });
   while (observations.size > CACHE_LIMIT) {
     // Insertion order, so the oldest fetch is the first one out.
     const oldest = observations.keys().next().value;
@@ -396,243 +359,13 @@ async function estimateOffThread(
   };
 }
 
-/** The vector at a full-resolution pixel, interpolated across the coarse grid
- *  so it does not change in steps at a cell edge. */
-function motionAt(m: Motion, x: number, y: number): [number, number] {
-  const cx = Math.min(DW - 1, Math.max(0, x / DOWN - 0.5));
-  const cy = Math.min(DH - 1, Math.max(0, y / DOWN - 0.5));
-  const x0 = Math.floor(cx);
-  const y0 = Math.floor(cy);
-  const x1 = Math.min(DW - 1, x0 + 1);
-  const y1 = Math.min(DH - 1, y0 + 1);
-  const fx = cx - x0;
-  const fy = cy - y0;
 
-  const at = (arr: Float32Array) =>
-    arr[y0 * DW + x0] * (1 - fx) * (1 - fy) +
-    arr[y0 * DW + x1] * fx * (1 - fy) +
-    arr[y1 * DW + x0] * (1 - fx) * fy +
-    arr[y1 * DW + x1] * fx * fy;
 
-  return [at(m.u), at(m.v)];
-}
 
-/* ── Warping ────────────────────────────────────────────────── */
 
-/**
- * Where every trajectory cell came from, in full-resolution pixels.
- *
- * The trajectories are curved — integrated in five-minute steps so the flow
- * is sampled where the parcel actually is — but they are integrated on a grid
- * coarser than the flow itself, not once per pixel. Doing it per pixel was
- * the same arithmetic repeated two and a quarter million times, and measured
- * it turned a 63 ms frame into 234 ms at the far end of the horizon.
- *
- * The grid can be this coarse because the deformation lives in the *flow*,
- * not in the trajectory sampling. Measured across four resolutions from one
- * cell per coarse pixel down to one per 64, CSI moved between 0.4522 and
- * 0.4539 — noise — and the warp cost did not move at all, being dominated by
- * the per-pixel loop below rather than by the integration. So the dense field
- * costs nothing on the hot path: the extra vectors are spent where they
- * matter and interpolated where they do not.
- */
-type Displacement = { dx: Float32Array; dy: Float32Array };
 
-/** Full-resolution pixels per trajectory cell, and the grid that follows. */
-const TRAJ = 32;
-/** 40 × 56 trajectory cells. Coarser than the flow on purpose; see above. */
-const TRAJ_X = Math.ceil(W / TRAJ);
-const TRAJ_Y = Math.ceil(H / TRAJ);
 
-/**
- * Integrates every trajectory cell backwards through the flow and returns
- * where each one came from. See the note above `type Displacement` for why
- * the grid is coarser than the flow.
- */
-function displacementFor(motion: Motion, minutes: number): Displacement {
-  const dx = new Float32Array(TRAJ_X * TRAJ_Y);
-  const dy = new Float32Array(TRAJ_X * TRAJ_Y);
 
-  const steps = Math.max(1, Math.min(8, Math.round(Math.abs(minutes) / 5)));
-  const dt = minutes / steps;
-
-  for (let by = 0; by < TRAJ_Y; by++) {
-    for (let bx = 0; bx < TRAJ_X; bx++) {
-      const startX = (bx + 0.5) * TRAJ;
-      const startY = (by + 0.5) * TRAJ;
-      let px = startX;
-      let py = startY;
-
-      for (let s = 0; s < steps; s++) {
-        const [u, v] = motionAt(motion, px, py);
-        px -= u * dt;
-        py -= v * dt;
-      }
-
-      const k = by * TRAJ_X + bx;
-      dx[k] = px - startX;
-      dy[k] = py - startY;
-    }
-  }
-
-  return { dx, dy };
-}
-
-/** Bilinear across the trajectory grid, so nothing changes in steps at a seam. */
-function displacementAt(
-  d: Displacement,
-  x: number,
-  y: number,
-): [number, number] {
-  const bx = Math.min(TRAJ_X - 1, Math.max(0, x / TRAJ - 0.5));
-  const by = Math.min(TRAJ_Y - 1, Math.max(0, y / TRAJ - 0.5));
-  const x0 = Math.floor(bx);
-  const y0 = Math.floor(by);
-  const x1 = Math.min(TRAJ_X - 1, x0 + 1);
-  const y1 = Math.min(TRAJ_Y - 1, y0 + 1);
-  const fx = bx - x0;
-  const fy = by - y0;
-
-  const at = (arr: Float32Array) =>
-    arr[y0 * TRAJ_X + x0] * (1 - fx) * (1 - fy) +
-    arr[y0 * TRAJ_X + x1] * fx * (1 - fy) +
-    arr[y1 * TRAJ_X + x0] * (1 - fx) * fy +
-    arr[y1 * TRAJ_X + x1] * fx * fy;
-
-  return [at(d.dx), at(d.dy)];
-}
-
-/**
- * Reused output buffers.
- *
- * An interpolated frame warps two observations and crossfades them, so the
- * naive version allocated six arrays of two and a quarter million bytes each
- * — fourteen megabytes handed to the collector for every frame of a scrub.
- * The pump renders one frame at a time and `renderField` reads a field to
- * completion before it awaits anything, so a fixed set of buffers is safe and
- * the garbage disappears.
- *
- * Only the mask is cleared between uses. Everything downstream gates on it,
- * so stale values under a zero mask are unreachable, and a single memset of
- * the mask is cheaper than clearing both.
- */
-function scratch() {
-  return { value: new Uint8Array(W * H), mask: new Uint8Array(W * H) };
-}
-
-/** Three, because the deepest case needs exactly that: two warps feeding one
- *  blend. A fourth would only be reachable if `fieldAt` grew a case. */
-const SCRATCH = [scratch(), scratch(), scratch()] as const;
-
-/**
- * Samples `field` as it would look `minutes` later — negative to look
- * backwards. Sampling runs backwards from each destination pixel, which is
- * what keeps the result free of the holes a forward scatter leaves behind.
- */
-function warp(
-  field: Field,
-  motion: Motion,
-  minutes: number,
-  into: { value: Uint8Array; mask: Uint8Array },
-): Field {
-  if (minutes === 0 || !field.box) return field;
-
-  const { value, mask } = into;
-  mask.fill(0);
-
-  /* Echo can only land within its own box plus however far the fastest vector
-     carries it, so everything outside that is guaranteed empty and is never
-     visited. On a normal day this is a few per cent of the grid, which is
-     what makes a full-resolution field affordable at all. */
-  /* The furthest a parcel can be carried over the whole trajectory, plus a
-     pixel of slack for the bilinear tap. */
-  const reach = Math.abs(minutes) * motion.maxSpeed + 2;
-  const box = clampBox(field.box, reach);
-
-  /* Backward trajectories, integrated in steps rather than jumped in one.
-   *
-   * A single `x - u * minutes` takes the vector at the destination and
-   * follows it in a straight line, which can only translate the pattern:
-   * every pixel of a cell moves by the same amount, so the cell arrives
-   * identical to itself. That is what makes a forecast look like a sticker
-   * sliding across the map.
-   *
-   * Walking the trajectory in five-minute steps samples the field where the
-   * parcel actually is at each moment. Where the flow speeds up, slows,
-   * turns or converges, neighbouring pixels take different paths — so the
-   * pattern stretches, rotates and squeezes on the way. That is not a
-   * cosmetic difference: deformation by the wind is a real part of how
-   * precipitation evolves, and it is the part advection can honestly claim.
-   */
-  const disp = displacementFor(motion, minutes);
-
-  for (let y = box.y0; y <= box.y1; y++) {
-    for (let x = box.x0; x <= box.x1; x++) {
-      const [ddx, ddy] = displacementAt(disp, x, y);
-      const sx = x + ddx;
-      const sy = y + ddy;
-
-      const x0 = Math.floor(sx);
-      const y0 = Math.floor(sy);
-      if (x0 < 0 || x0 >= W - 1 || y0 < 0 || y0 >= H - 1) continue;
-
-      const fx = sx - x0;
-      const fy = sy - y0;
-      const i00 = y0 * W + x0;
-      const i10 = i00 + 1;
-      const i01 = i00 + W;
-      const i11 = i01 + 1;
-
-      const w00 = (1 - fx) * (1 - fy) * (field.mask[i00] ? 1 : 0);
-      const w10 = fx * (1 - fy) * (field.mask[i10] ? 1 : 0);
-      const w01 = (1 - fx) * fy * (field.mask[i01] ? 1 : 0);
-      const w11 = fx * fy * (field.mask[i11] ? 1 : 0);
-      const sum = w00 + w10 + w01 + w11;
-      if (sum < 0.5) continue;
-
-      const j = y * W + x;
-      const carried =
-        (field.value[i00] * w00 +
-          field.value[i10] * w10 +
-          field.value[i01] * w01 +
-          field.value[i11] * w11) /
-        sum;
-
-      value[j] = carried < 0 ? 0 : carried > 255 ? 255 : Math.round(carried);
-      mask[j] = 255;
-    }
-  }
-
-  return { value, mask, box };
-}
-
-/** Crossfades two already-warped fields. Where only one has data it wins
- *  outright, so a cell entering the domain does not fade up out of nothing. */
-function blend(
-  a: Field,
-  b: Field,
-  t: number,
-  into: { value: Uint8Array; mask: Uint8Array },
-): Field {
-  const { value, mask } = into;
-  mask.fill(0);
-  const box = unionBox(a.box, b.box);
-  if (!box) return { value, mask, box: null };
-
-  for (let y = box.y0; y <= box.y1; y++) {
-    for (let x = box.x0; x <= box.x1; x++) {
-      const i = y * W + x;
-      const ma = a.mask[i] ? 1 - t : 0;
-      const mb = b.mask[i] ? t : 0;
-      const sum = ma + mb;
-      if (sum <= 0) continue;
-      value[i] = Math.round((a.value[i] * ma + b.value[i] * mb) / sum);
-      mask[i] = 255;
-    }
-  }
-
-  return { value, mask, box };
-}
 
 /**
  * A motion field built from the steering flow instead of from the echo.
@@ -673,6 +406,144 @@ function motionFromSteering(steering: Steering): Motion {
   }
 
   return sealMotion(u, v);
+}
+
+/* ── Painting off the main thread ────────────────────────────
+ *
+ * Client for render.worker.ts. Optional on the same terms as the motion
+ * worker: no Worker constructor, a throw, an error, a timeout — each falls
+ * back to running the same code inline.
+ */
+
+type RenderReply = { id: number; image: ImageBitmap | null; coordinates?: Corners };
+
+/**
+ * `null` — the observations could not be assembled; retry.
+ * `{ painted: null }` — they were, and hold nothing above SIGNAL_FLOOR.
+ *
+ * fieldAt and renderField used to carry this distinction between them. Behind
+ * one call it has to be explicit, or the cold-start retry fires on clear sky.
+ */
+export type Frame = { painted: Painted | null } | null;
+
+let renderHandle: Worker | null = null;
+let renderUnavailable = false;
+let nextRenderId = 1;
+const renderPending = new Map<number, (r: RenderReply) => void>();
+
+function renderWorker(): Worker | null {
+  if (renderUnavailable) return null;
+  if (renderHandle) return renderHandle;
+  if (typeof Worker === "undefined") {
+    renderUnavailable = true;
+    return null;
+  }
+  try {
+    const w = new Worker(new URL("./render.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    w.onmessage = (e: MessageEvent<RenderReply>) => {
+      renderPending.get(e.data.id)?.(e.data);
+      renderPending.delete(e.data.id);
+    };
+    /* One error retires it: every later frame would otherwise pay
+       RENDER_TIMEOUT before falling back. */
+    w.onerror = () => {
+      renderUnavailable = true;
+      renderHandle = null;
+      for (const settle of renderPending.values()) settle({ id: -1, image: null });
+      renderPending.clear();
+      w.terminate();
+    };
+    renderHandle = w;
+    // Backfill: the worker may be built after observations have landed.
+    for (const [key, field] of observations) {
+      w.postMessage({ k: "obs", key, value: field.value, mask: field.mask, box: field.box });
+    }
+    return w;
+  } catch {
+    renderUnavailable = true;
+    return null;
+  }
+}
+
+/** Fire-and-forget state, dropped silently when there is no worker. */
+function renderPost(msg: unknown) {
+  renderWorker()?.postMessage(msg);
+}
+
+/** The worker's tiles.ts is a separate module instance; its table is empty. */
+export function shareLut(lut: Uint8Array) {
+  renderPost({ k: "lut", lut });
+}
+
+/** 160x224 floats, 286KB. Once per sequence, never per frame. */
+export function shareMotion(motion: Motion) {
+  renderPost({ k: "seq", motion });
+}
+
+/** Deliberately far above the ~47ms a frame takes: this catches a dead
+ *  worker, not a busy one. */
+const RENDER_TIMEOUT = 2000;
+
+/**
+ * A painted frame, off-thread when possible.
+ *
+ * Observation selection and fetching stay here, with the cache; the worker is
+ * given the two keys. Falls back to inline when it is absent or does not
+ * answer.
+ */
+export async function paintAt(
+  seq: Sequence,
+  time: number,
+  lut: Uint8Array,
+): Promise<Frame> {
+  const need = bracket(seq, time);
+
+  /* Awaited before posting: this guarantees `remember` has already pushed
+     both observations to the worker. */
+  const [a, b] = await Promise.all([
+    observation(seq.product, need.aTime),
+    need.ahead ? Promise.resolve(null) : observation(seq.product, need.bTime),
+  ]);
+  /* `null`, not an empty frame: the observations could not be assembled, and
+     the caller's retry is for exactly this. An empty frame is a different
+     answer and comes back as `{ painted: null }`. */
+  if (!a && !b) return null;
+
+  const w = renderWorker();
+  if (w) {
+    const id = nextRenderId++;
+    const reply = await new Promise<RenderReply | null>((resolve) => {
+      const timer = setTimeout(() => {
+        renderPending.delete(id);
+        resolve(null);
+      }, RENDER_TIMEOUT);
+      renderPending.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      w.postMessage({
+        k: "render",
+        id,
+        time,
+        aKey: `${seq.product.key}:${need.aTime}`,
+        bKey: `${seq.product.key}:${need.bTime}`,
+        aTime: need.aTime,
+        step: need.step,
+        ahead: need.ahead,
+      });
+    });
+    if (reply?.image && reply.coordinates) {
+      return { painted: { image: reply.image, coordinates: reply.coordinates } };
+    }
+    /* Null reply: empty field, or the worker lacked an observation. Falling
+       through recomputes inline and reaches the same answer either way. */
+  }
+
+  const field = compose(a, b, need.aTime, need.step, seq.motion, time, need.ahead);
+  if (!field) return null;
+  return { painted: await renderField(field, lut) };
 }
 
 /* ── Sequence ───────────────────────────────────────────────── */
@@ -743,113 +614,29 @@ export async function fieldAt(
   seq: Sequence,
   time: number,
 ): Promise<Field | null> {
-  const step = seq.product.stepMinutes * 60_000;
-  const grid = Math.floor(time / step) * step;
-
-  // Past the last observation there is only one frame to work from.
-  if (time >= seq.latest) {
-    const now = await observation(seq.product, seq.latest);
-    if (!now) return null;
-    return warp(now, seq.motion, (time - seq.latest) / 60_000, SCRATCH[0]);
-  }
-
-  const older = Math.min(grid, seq.latest - step);
-  const newer = older + step;
+  const need = bracket(seq, time);
   const [a, b] = await Promise.all([
-    observation(seq.product, older),
-    observation(seq.product, newer),
+    observation(seq.product, need.aTime),
+    need.ahead ? Promise.resolve(null) : observation(seq.product, need.bTime),
   ]);
+  return compose(a, b, need.aTime, need.step, seq.motion, time, need.ahead);
+}
 
-  if (!a && !b) return null;
-  if (!a) return b;
-  if (!b) return a;
-
-  /* Both ends carried towards the instant, then crossfaded. Warping only one
-     of them would make each observation arrive with a jolt as the source
-     switched; warping both means the picture is always in motion and the
-     observations are just the moments where it agrees with the radar. */
-  const t = (time - older) / step;
-  const forward = warp(a, seq.motion, (t * step) / 60_000, SCRATCH[0]);
-  const backward = warp(b, seq.motion, -((1 - t) * step) / 60_000, SCRATCH[1]);
-  return blend(forward, backward, t, SCRATCH[2]);
+/** Which two observations an instant sits between. Separate from fetching
+ *  them because paintAt needs the same answer to build the worker message. */
+export function bracket(seq: Sequence, time: number) {
+  const step = seq.product.stepMinutes * 60_000;
+  if (time >= seq.latest) {
+    return { ahead: true, step, aTime: seq.latest, bTime: seq.latest };
+  }
+  const grid = Math.floor(time / step) * step;
+  const aTime = Math.min(grid, seq.latest - step);
+  return { ahead: false, step, aTime, bTime: aTime + step };
 }
 
 /* ── Rendering ──────────────────────────────────────────────── */
 
-/** Corners for MapLibre's image source: TL, TR, BR, BL. */
-export type Corners = [
-  [number, number],
-  [number, number],
-  [number, number],
-  [number, number],
-];
 
-/** A pixel edge on the working grid, as longitude / latitude. */
-function edgeLon(px: number): number {
-  return lonAt(X0 + px / TILE);
-}
 
-/** The same for a horizontal pixel edge; see edgeLon. */
-function edgeLat(py: number): number {
-  return latAt(Y0 + py / TILE);
-}
 
-/** A frame ready for the map: the cropped bitmap, and the quad it belongs in.
- *  The two travel together because the crop moves as the weather does — the
- *  image alone would be placed wrong on the very next frame. */
-export type Painted = { image: ImageBitmap; coordinates: Corners };
 
-/**
- * Paints a field through the palette currently in effect, cropped to the box
- * its echo occupies, and returns where that crop belongs on the map.
- *
- * Cropping is not an optimisation of the drawing — it is an optimisation of
- * the upload. A full-grid frame is 1280 × 1792 RGBA, nine megabytes pushed to
- * the GPU for every step of a scrub, most of it transparent. Sending only the
- * rectangle the weather is actually in cuts that to a fraction on any normal
- * day, and the image source is told exactly where to put it, so nothing moves
- * by a pixel.
- */
-export async function renderField(field: Field): Promise<Painted | null> {
-  const box = field.box;
-  if (!box) return null;
-
-  const lut = currentLut();
-  const w = box.x1 - box.x0 + 1;
-  const h = box.y1 - box.y0 + 1;
-  const img = new ImageData(w, h);
-  const px = img.data;
-
-  for (let y = box.y0; y <= box.y1; y++) {
-    const src = y * W;
-    const dst = (y - box.y0) * w - box.x0;
-    for (let x = box.x0; x <= box.x1; x++) {
-      const i = src + x;
-      if (!field.mask[i]) continue;
-      const o = (dst + x) * 4;
-      const l = field.value[i] * 4;
-      px[o] = lut[l];
-      px[o + 1] = lut[l + 1];
-      px[o + 2] = lut[l + 2];
-      px[o + 3] = lut[l + 3];
-    }
-  }
-
-  /* The crop's outer edges, not its pixel centres: an image source spans the
-     quad it is given, so a half-pixel error here would shift the whole frame
-     against the coastline. */
-  const west = edgeLon(box.x0);
-  const east = edgeLon(box.x1 + 1);
-  const north = edgeLat(box.y0);
-  const south = edgeLat(box.y1 + 1);
-
-  return {
-    image: await createImageBitmap(img),
-    coordinates: [
-      [west, north],
-      [east, north],
-      [east, south],
-      [west, south],
-    ],
-  };
-}

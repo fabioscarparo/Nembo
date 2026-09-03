@@ -1,20 +1,13 @@
 "use client";
 
 /**
- * Reads the paint trace back out, on the device that recorded it.
+ * Renders the paint trace on the device that recorded it.
  *
- * The failure this exists for only happens on a phone, at first launch, and
- * every one of its possible causes looks the same on screen: a map with no
- * weather on it. A phone has no console, so the trace has to render itself.
+ * The previous session is the interesting half: reproducing the failure means
+ * launching normally, so the panel cannot have been asked for in advance.
  *
- * Two sessions are shown, and the previous one is the interesting half —
- * reproducing the bug means launching the app normally, so the reader cannot
- * have asked for this panel in advance. Launch, watch it fail, then reopen
- * with `?debug=1` and read what the launch before recorded.
- *
- * Copying matters as much as showing: the whole point is to get these lines
- * off the phone and into a message, and nobody transcribes forty timestamps
- * by hand.
+ * The copy button is not a convenience — forty timestamps have to leave the
+ * phone somehow.
  */
 import { useCallback, useEffect, useState } from "react";
 
