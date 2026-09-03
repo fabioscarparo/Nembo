@@ -35,14 +35,17 @@ export default function manifest(): MetadataRoute.Manifest {
     /* No browser chrome. The map already owns the viewport, and a URL bar over
        it costs a strip of the only thing on screen. */
     display: "standalone",
-    /* Both the icon's own navy. `background_color` paints the splash the
-       launcher shows before the first frame, so the icon sits on the shade it
-       is made of and reads as one surface rather than a square on a card.
-       The `<meta name="theme-color">` pair in `layout.tsx` still overrides the
-       browser UI per colour scheme; this one only dresses the installed
-       shell, where a single value is all the manifest can carry. */
+    /* No `theme_color` on purpose. The field holds a single colour and the
+       manifest has no way to ask what the system is set to, so declaring one
+       paints the installed app's bar that colour in both appearances — which
+       is what put a navy bar over a white page. Omitted, the browser falls
+       back to `<meta name="theme-color">`, and that one does take a `media`
+       query.
+
+       `background_color` stays: it paints the launch splash, which exists
+       before the document does and so can never be theme-aware either way.
+       The icon's own navy is what makes the mark sit on it as one surface. */
     background_color: "#0d2233",
-    theme_color: "#0d2233",
     categories: ["weather", "utilities"],
     /* The same two files listed twice, under each purpose. `purpose` accepts
        a space-separated list in the spec, but `MetadataRoute.Manifest` types

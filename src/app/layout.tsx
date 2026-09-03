@@ -107,13 +107,15 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  /* One value, not a `prefers-color-scheme` pair. The pair can only track the
-     operating system, while the theme here is a setting the visitor can point
-     the other way — and with the dark palette hanging off a `.dark` class that
-     only script adds, a scriptless load is light whatever the system asks for.
-     So this is the scriptless colour, and `applyTheme` rewrites it to the
-     resolved `--bg` from the boot script onward. */
-  themeColor: "#ffffff",
+  /* Left to the operating system rather than driven from `applyTheme`. The
+     in-app theme can be pointed the other way — light chosen on a dark phone —
+     and the bar will then disagree with the page under it, which is accepted:
+     a `media` pair is the only form the installed shell honours consistently,
+     and matching the system is what the bar is expected to do. */
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0c0c0c" },
+  ],
 };
 
 /**
@@ -137,19 +139,6 @@ const bootScript = `
       (choice === "system" &&
         window.matchMedia("(prefers-color-scheme: dark)").matches);
     if (dark) document.documentElement.classList.add("dark");
-    /* Before first paint, for the same reason the class is: an installed app
-       has no browser chrome covering the seam, so a bar corrected a frame
-       later is a visible flash of the wrong theme. Duplicated from
-       \`paintChrome\` rather than imported because this runs as text, ahead
-       of any bundle. The stylesheet is parsed by now — a classic inline script
-       blocks on the pending sheet above it — so \`--bg\` resolves. */
-    var bg = getComputedStyle(document.documentElement)
-      .getPropertyValue("--bg")
-      .trim();
-    if (bg) {
-      var bars = document.querySelectorAll('meta[name="theme-color"]');
-      for (var i = 0; i < bars.length; i++) bars[i].content = bg;
-    }
   } catch (e) {}
 })();
 `;
