@@ -43,7 +43,8 @@ import {
   storeProduct,
 } from "@/lib/dpc";
 import { RAMPS, buildLut, watchTheme } from "@/lib/colormap";
-import { lutEpoch, setLut } from "@/lib/tiles";
+import { currentLut, lutEpoch, setLut } from "@/lib/tiles";
+import { trace, tracingPaint } from "@/lib/trace";
 import {
   COMPOSITE_BOUNDS,
   DOMAIN,
@@ -57,7 +58,7 @@ import {
 } from "@/lib/nowcast";
 import { type Steering, fetchSteering } from "@/lib/wind";
 import { usePageVisible, useVisibleInterval } from "@/lib/visibility";
-import { firstLabelLayer, resolveStyle } from "@/lib/basemap";
+import { firstLabelLayer, resolveStyle, withRadar } from "@/lib/basemap";
 import { readMuted, setMuted, useSound } from "@/lib/sound";
 import { readHaptics, setHaptics, useHaptics } from "@/lib/haptics";
 import { type ThemeChoice, applyTheme, readTheme } from "@/lib/theme";
@@ -329,6 +330,22 @@ export default function RadarMap() {
    * them. Called after every style load, because setStyle() discards every
    * source and layer the style did not declare — the radar included.
    */
+  /* Wraps a freshly fetched style so the radar is part of it before MapLibre
+     ever sees it. Used both when the map is built and when the theme swaps the
+     whole style out. */
+  const dressStyle = useCallback(
+    (style: StyleSpecification) =>
+      withRadar(
+        style,
+        RADAR_SOURCE,
+        RADAR_LAYER,
+        COMPOSITE_BOUNDS,
+        BLANK,
+        radarOpacity(),
+      ),
+    [],
+  );
+
   const applyRadar = useCallback((m: MapLibreMap, style?: StyleSpecification) => {
     if (m.getLayer(RADAR_LAYER)) return;
 
@@ -380,7 +397,7 @@ export default function RadarMap() {
     setWorkerUrl("/maplibre-gl-worker.mjs");
 
     (async () => {
-      const style = await resolveStyle(isDark());
+      const style = dressStyle(await resolveStyle(isDark()));
       if (cancelled || !container.current) return;
 
       const m = new MapLibreMap({
@@ -406,9 +423,11 @@ export default function RadarMap() {
       }
 
       m.on("style.load", () => {
+        trace("style.load");
         applyRadar(m, m.getStyle());
         setStyleEpoch((n) => n + 1);
       });
+      m.on("error", (e) => trace("map.error", { msg: String(e?.error ?? e).slice(0, 60) }));
 
       /* Locate on arrival, so the map opens on the weather over your head
          rather than on the country. A permission already refused is not asked
@@ -433,10 +452,14 @@ export default function RadarMap() {
 
       /* Closes a race: the style can finish parsing between the constructor
          and the handler attached to it a few lines up. */
-      if (m.isStyleLoaded()) {
-        applyRadar(m, m.getStyle());
-        setStyleEpoch((n) => n + 1);
-      }
+      trace("map.created", { alreadyLoaded: m.isStyleLoaded() });
+      /* Opened here rather than from `style.load`. The layer is already in the
+         style this map was constructed from, so there is nothing left to wait
+         for — and waiting was the bug: the event is withheld until sprite and
+         glyphs land, and never arrives at all while the page is not rendering.
+         The handler above still runs, and is still needed for the theme swap;
+         it just no longer decides when the radar may first be drawn. */
+      setStyleEpoch((n) => n + 1);
     })();
 
     return () => {
@@ -510,14 +533,17 @@ export default function RadarMap() {
     const controller = new AbortController();
     let cancelled = false;
 
+    trace("seq.start", { product, latest, steering: steering ? "yes" : "no" });
     buildSequence(product, latest, steering, controller.signal)
       .then((s) => {
+        trace("seq.ok", { cancelled, motion: s?.motion ? "yes" : "no" });
         if (!cancelled) setSequence(s);
       })
       /* A missing baseline is the usual cause and it fixes itself on the next
          publication. The radar keeps working without motion; it just stops
          moving between observations. */
-      .catch(() => {
+      .catch((e) => {
+        trace("seq.FAIL", { cancelled, msg: String(e?.message ?? e).slice(0, 60) });
         if (!cancelled) setSequence(null);
       });
 
@@ -594,6 +620,24 @@ export default function RadarMap() {
           const field = await fieldAt(next.seq, next.time);
           if (map.current !== m) continue;
 
+          /* One line per decision, only for the first frames. See lib/trace.ts:
+             every branch below ends as an empty map, and on a phone they are
+             indistinguishable without this. */
+          const watching = tracingPaint();
+          if (watching) {
+            const lut = currentLut();
+            let opaque = 0;
+            for (let i = 3; i < lut.length; i += 4) if (lut[i] > 0) opaque += 1;
+            trace("field", {
+              ok: field ? "yes" : "NULL",
+              box: field?.box
+                ? `${field.box.x1 - field.box.x0 + 1}x${field.box.y1 - field.box.y0 + 1}`
+                : "none",
+              lutOpaque: opaque,
+              retries: coldRetries.current,
+            });
+          }
+
           /* A null field is "the observation could not be assembled", not
              "there is nothing to draw" — an empty sky still comes back as a
              field of zeroes. On a cold start it means the stitch lost every
@@ -628,7 +672,31 @@ export default function RadarMap() {
           if (map.current !== m) continue;
 
           const src = m.getSource(RADAR_SOURCE) as ImageSource | undefined;
-          if (!src) continue;
+          if (watching) {
+            trace("draw", {
+              painted: painted ? `${painted.image.width}x${painted.image.height}` : "NULL",
+              layer: m.getLayer(RADAR_LAYER) ? "yes" : "MISSING",
+              source: src ? "yes" : "MISSING",
+              opacity: m.getLayer(RADAR_LAYER)
+                ? m.getPaintProperty(RADAR_LAYER, "raster-opacity")
+                : "-",
+            });
+          }
+          /* Re-queued, not dropped. The source arrives with the style, but the
+             style is parsed on MapLibre's own schedule, and the loop has
+             already emptied the queue by this point — so a frame abandoned
+             here leaves nothing behind to draw it later. This is the same
+             dead end the null-field branch above had. */
+          if (!src) {
+            if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
+              coldRetries.current += 1;
+              wanted.current = next;
+              await new Promise<void>((r) => {
+                window.setTimeout(r, COLD_RETRY_MS);
+              });
+            }
+            continue;
+          }
 
           everPainted.current = true;
           coldRetries.current = 0;
@@ -652,8 +720,19 @@ export default function RadarMap() {
   useEffect(() => {
     const m = map.current;
     if (!m || !sequence || displayed === null || !mapReady || styleEpoch === 0) {
+      /* Traced as well as returned. "The paint never ran" and "the paint ran
+         and drew nothing" look identical on screen and have nothing in common
+         underneath, so the gate has to say which one happened. */
+      trace("gate", {
+        map: m ? "yes" : "no",
+        seq: sequence ? "yes" : "no",
+        displayed: displayed === null ? "null" : "yes",
+        mapReady,
+        styleEpoch,
+      });
       return;
     }
+    trace("queue", { styleEpoch, paletteEpoch, latest: sequence.latest });
     wanted.current = { time: displayed, seq: sequence };
     void paint(m);
     /* `paletteEpoch` is in here because the table the frame is painted through
@@ -677,15 +756,16 @@ export default function RadarMap() {
          style swap rather than a paint-property edit. Every source and layer
          goes with it — the `style.load` handler puts the radar back, and
          bumping the token makes the next paint repaint it in the new palette. */
-      resolveStyle(isDark()).then((style) => {
+      resolveStyle(isDark()).then((raw) => {
         if (map.current !== m) return;
+        const style = dressStyle(raw);
         /* setStyle drops every source and layer; `style.load` puts the radar
            back and bumps the epoch, which repaints the frame in the new
            palette without recomputing any motion. */
         m.setStyle(style);
       });
     });
-  }, [refreshPalette]);
+  }, [refreshPalette, dressStyle]);
 
   /* ── Place ───────────────────────────────────────────────── */
 

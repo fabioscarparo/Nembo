@@ -102,3 +102,73 @@ export async function resolveStyle(dark: boolean): Promise<StyleSpecification> {
 export function firstLabelLayer(style: StyleSpecification): string | undefined {
   return style.layers.find((l) => l.type === "symbol")?.id;
 }
+
+/**
+ * Returns the style with the radar's source and layer already in it.
+ *
+ * The radar used to be added imperatively, from the map's `style.load`
+ * handler. That event is the wrong signal: MapLibre withholds it until the
+ * basemap's sprite sheet and every glyph range the labels need have finished
+ * downloading, none of which the radar has any use for. On a first launch —
+ * cold HTTP cache, a permission prompt holding the frame, a phone on mobile
+ * data — that wait is seconds long, and it is dead time in which the radar has
+ * its data and cannot draw it. The observed failure was worse than slow: with
+ * the page not rendering the event does not arrive at all, and the map stays
+ * empty while everything behind it is ready.
+ *
+ * Declaring the layer in the style instead removes the question. There is no
+ * event to wait for, because the layer is part of what the map is constructed
+ * from.
+ *
+ * The source starts on a blank pixel; the first painted frame replaces it
+ * through `updateImage`.
+ */
+export function withRadar(
+  style: StyleSpecification,
+  source: string,
+  layer: string,
+  coordinates: [
+    [number, number],
+    [number, number],
+    [number, number],
+    [number, number],
+  ],
+  blank: string,
+  opacity: number,
+): StyleSpecification {
+  if (style.layers.some((l) => l.id === layer)) return style;
+
+  /* Shallow-copied rather than mutated: the caller's style may be the cached
+     fallback object, and a second map would then find the radar already in it
+     and skip its own insertion. */
+  const layers = [...style.layers];
+  const before = firstLabelLayer(style);
+  const at = before ? layers.findIndex((l) => l.id === before) : -1;
+
+  const radar = {
+    id: layer,
+    type: "raster" as const,
+    source,
+    paint: {
+      "raster-opacity": opacity,
+      "raster-resampling": "linear" as const,
+      /* MapLibre's default 300 ms cross-fade is tuned for panning between
+         zooms. On a timeline it smears every frame into the next. */
+      "raster-fade-duration": 0,
+    },
+  };
+
+  /* Under the place names: precipitation over a city should not erase its
+     label — that is the moment you most want to know which city it is. */
+  if (at >= 0) layers.splice(at, 0, radar);
+  else layers.push(radar);
+
+  return {
+    ...style,
+    sources: {
+      ...style.sources,
+      [source]: { type: "image", url: blank, coordinates },
+    },
+    layers,
+  };
+}
