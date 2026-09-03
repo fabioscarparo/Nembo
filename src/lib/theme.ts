@@ -52,10 +52,40 @@ export function prefersDark(): boolean {
 export function applyTheme(choice: ThemeChoice): void {
   const dark = choice === "dark" || (choice === "system" && prefersDark());
   document.documentElement.classList.toggle("dark", dark);
+  paintChrome();
   try {
     localStorage.setItem(THEME_KEY, choice);
   } catch {
     // Private mode with storage disabled — the choice just won't persist.
+  }
+}
+
+/**
+ * Repaints the browser and OS chrome to match the page behind it.
+ *
+ * Installed to the home screen there is no browser UI to hide the seam: the
+ * status bar sits directly against the map, and a bar left on the colour the
+ * document shipped with reads as a stripe of the wrong theme across the top.
+ *
+ * The colour is read back out of `--bg` rather than repeated here, because the
+ * class has already been toggled by the time this runs and the stylesheet is
+ * the only thing that should own what each theme looks like. A `media`
+ * attribute would not do: it can only follow the operating system, and the
+ * whole point of the settings panel is that the visitor may have chosen the
+ * theme the operating system did not ask for.
+ */
+function paintChrome(): void {
+  const bg = getComputedStyle(document.documentElement)
+    .getPropertyValue("--bg")
+    .trim();
+  /* Empty only if the stylesheet has not parsed. Leaving the tag alone beats
+     writing an empty colour, which browsers treat as "no preference" and
+     resolve to their own default rather than to the theme. */
+  if (!bg) return;
+  for (const meta of document.querySelectorAll<HTMLMetaElement>(
+    'meta[name="theme-color"]',
+  )) {
+    meta.content = bg;
   }
 }
 

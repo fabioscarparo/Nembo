@@ -760,6 +760,12 @@ body {
   margin-top: 18px;
 }
 
+/* The 18px above sets the credits apart from the settings; repeating it
+   between them would read as two unrelated footers rather than one block. */
+.panel-credit + .panel-credit {
+  margin-top: 8px;
+}
+
 /* The surrounding text is --fg-soft, matching the row labels, so the link
    needs --fg to stay distinguishable against it. */
 .panel-credit a {
