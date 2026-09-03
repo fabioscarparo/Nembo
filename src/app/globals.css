@@ -744,3 +744,39 @@ body {
   flex: none;
   background: var(--border);
 }
+
+/* ── Panel credit ────────────────────────────────────────────
+   Flex, not inline: an inline icon sits on the text baseline and needs a
+   per-icon vertical nudge to look centred. `align-items: center` removes that
+   tuning.
+
+   The 8px gap and the 14px icon are the same values the setting rows use, so
+   all four icons share one left edge. Changing either here breaks that
+   column. */
+.panel-credit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* The surrounding text is --fg-soft, matching the row labels, so the link
+   needs --fg to stay distinguishable against it. */
+.panel-credit a {
+  color: var(--fg);
+  font-weight: 500;
+  text-decoration: none;
+  transition: color var(--duration-quick) var(--ease-smooth-out);
+}
+
+/* Underline rather than a colour shift: the resting colour is already --fg,
+   so there is no darker step to move to.
+
+   Guarded like every other hover in this file — on touch, :hover sticks after
+   a tap and leaves the link looking permanently pressed. */
+@media (hover: hover) {
+  .panel-credit a:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}

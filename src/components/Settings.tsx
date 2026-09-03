@@ -15,7 +15,7 @@
  * lives in RadarMap, which owns both open states.
  */
 import { memo, useCallback, useMemo, useRef } from "react";
-import { Mobile, Palette, VolumeHigh } from "reicon-react";
+import { Mobile, Palette, Personalcard, VolumeHigh } from "reicon-react";
 
 import { THEME_CYCLE, type ThemeChoice } from "@/lib/theme";
 import SlidingTabs, { type TabOption } from "./SlidingTabs";
@@ -167,6 +167,18 @@ function Settings({
           className="t-tabs-fill min-w-0 flex-1 text-[10px] font-medium"
         />
       </div>
+
+      {/* `rel="noreferrer"` implies `noopener`. Without it the opened page
+          receives a live `window.opener` handle and can navigate this one. */}
+      <p className="panel-credit text-fg-soft text-[12px]">
+        <Personalcard size={14} className="text-muted shrink-0" aria-hidden />
+        <span>
+          Made by{" "}
+          <a href="https://fscarparo.com" target="_blank" rel="noreferrer">
+            Fabio Scarparo
+          </a>
+        </span>
+      </p>
     </div>
   );
 }
