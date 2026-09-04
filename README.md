@@ -61,16 +61,17 @@ Working on the raw data offers two fundamental advantages. First, Nembo can buil
 
 ### The forecast
 
-Nembo estimates the motion of precipitation by comparing two radar observations thirty minutes apart, reconstructing the motion field in three steps.
+Nembo estimates how precipitation moves by comparing radar observations taken thirty minutes apart.
 
-The observations are first **reduced by a factor of eight**, keeping the maximum value of each cell. This keeps the most intense precipitation cores from being diluted by averaging, leaving them distinct enough to be tracked. **Block matching** then runs on this grid: each block looks for the displacement that best overlaps the two observations. The results are aggregated into a consensus vector, weighted by how much echo supports each estimate. If no sufficient agreement emerges, the motion is treated as unmeasurable.
+The observations are first simplified to preserve the strongest precipitation cores. Nembo then tracks their movement to determine the dominant direction and speed of the precipitation.
 
-The consensus vector, however, describes only the overall transport. To capture local variation, Nembo computes a **Lucas-Kanade optical flow**, obtaining one vector per cell. Where echo is insufficient, optical flow can produce arbitrary estimates, which is why each vector is constrained toward the consensus motion, limiting how far it may depart from it without erasing its local direction. The resulting field can therefore deform where the data justify it, while staying coherent elsewhere. The observations are finally transported along this field in five-minute steps. Trajectories are integrated by following the flow rather than applying a simple linear translation, so precipitation can rotate, stretch and compress as it moves.
+To capture local variations, this motion is refined with optical flow. This allows different areas of precipitation to move independently while keeping the overall field coherent where the data is less reliable.
 
-When the observations do not allow a reliable consensus to be reconstructed, Nembo falls back on the **steering wind**, computed as a mass-weighted mean between 850 and 500 hPa. If that too is unavailable, the forecast is declared absent rather than artificially presenting the present as the future.
+The resulting motion field is used to move precipitation forward in five-minute steps. Rather than simply shifting the entire image, Nembo follows the estimated trajectories, allowing precipitation to rotate, stretch and compress as it moves.
 
-The whole process takes about **120 ms** and runs in a **Web Worker**, keeping the interface responsive while the motion field is reconstructed.
+When the radar observations are not sufficient to determine a reliable motion, Nembo falls back to the **steering wind**, calculated from the atmosphere between 850 and 500 hPa. If that is unavailable too, no forecast is generated rather than simply extending the current conditions into the future.
 
+The entire process takes around **120 ms** and runs in a **Web Worker**, keeping the interface responsive while the forecast is calculated.
 
 ---
 
