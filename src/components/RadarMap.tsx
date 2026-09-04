@@ -143,6 +143,9 @@ export default function RadarMap() {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const pin = useRef<Marker | null>(null);
+  /* Whether the marker is already in the DOM. See the position effect:
+     `addTo` is not idempotent. */
+  const pinned = useRef(false);
 
 
   /* Which quantity is on screen. Reflectivity to open on, because it is the
@@ -512,6 +515,7 @@ export default function RadarMap() {
       setStyleEpoch(0);
       pin.current?.remove();
       pin.current = null;
+      pinned.current = false;
       created?.remove();
       map.current = null;
     };
@@ -951,10 +955,25 @@ export default function RadarMap() {
 
   /* ── Position ────────────────────────────────────────────── */
 
+  /* `setLngLat` on every fix, `addTo` only on the first.
+   *
+   * Marker.addTo is not idempotent: it opens with `this.remove()` and then
+   * `appendChild`s the element again. Detaching and re-attaching a node
+   * restarts every CSS animation on it, so the halo's pulse jumped back to
+   * scale(1) on each call. Invisible on a desktop, which gets one fix and
+   * stops; on a phone `watchPosition` delivers one every second or so, and
+   * the pulse was being cut off and restarted at that rate.
+   *
+   * setLngLat calls the marker's own _update(), so the position still
+   * follows every fix. */
   useEffect(() => {
     const m = map.current;
     if (!mapReady || !m || !pin.current || !position) return;
-    pin.current.setLngLat(position).addTo(m);
+    pin.current.setLngLat(position);
+    if (!pinned.current) {
+      pinned.current = true;
+      pin.current.addTo(m);
+    }
   }, [position, mapReady]);
 
   /* Our own watch rather than MapLibre's GeolocateControl.
