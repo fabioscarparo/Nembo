@@ -262,9 +262,16 @@ body {
   background: var(--pin-halo);
 }
 
+/* A symmetric curve, not `--ease-smooth-out`. A keyframe animation applies
+   its timing function between each pair of keyframes, not once across the
+   whole run: a front-loaded curve therefore reaches 50% with near-zero
+   velocity and restarts at its steepest, and does the same again across the
+   100% -> 0% wrap. Two visible jolts a cycle. This one is the usual
+   sine-in-out approximation, flat at both ends of each half, so the halves
+   meet at matching velocity and the pulse reads as one continuous breath. */
 @media (prefers-reduced-motion: no-preference) {
   .pin-halo {
-    animation: pin-pulse 2.4s var(--ease-smooth-out) infinite;
+    animation: pin-pulse 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
   }
 }
 
