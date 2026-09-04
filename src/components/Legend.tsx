@@ -105,10 +105,10 @@ function Scale({
       aria-hidden={!open}
     >
       <>
-        <div className="text-fg text-[13px] font-medium">
+        <div className="text-fg text-[14px] font-medium">
           {legend.title} ({unit})
         </div>
-        <p className="text-muted mt-1 text-[12px] leading-snug">{legend.blurb}</p>
+        <p className="text-muted mt-1 text-[13px] leading-snug">{legend.blurb}</p>
 
         {/* Checkered behind the bar, because the low end of this palette is
             transparent and a flat backing would show it as a solid colour. */}
@@ -116,7 +116,7 @@ function Scale({
           <div className="h-3 w-full rounded-full" style={{ background: gradient }} />
         </div>
 
-        <div className="text-muted numeric mt-2 flex justify-between text-[11px]">
+        <div className="text-muted numeric mt-2 flex justify-between text-[12px]">
           {legend.bands.map((b) => (
             <span key={b.at}>{b.at}</span>
           ))}
@@ -126,11 +126,11 @@ function Scale({
           {legend.bands.map((b, i) => {
             const Icon = ICONS[Math.min(ICONS.length - 1, i)];
             return (
-            <div key={b.at} className="flex items-center justify-between text-[12px]">
+            <div key={b.at} className="flex items-center justify-between text-[13px]">
               <span className="text-fg-soft flex items-center gap-2">
                 {/* Inherits the label's colour, so the two read as one item
                     rather than as an icon with a caption beside it. */}
-                <Icon size={15} aria-hidden />
+                <Icon size={16} aria-hidden />
                 {b.label}
               </span>
               <span className="text-muted numeric">
@@ -141,7 +141,7 @@ function Scale({
           })}
         </div>
 
-        <p className="text-muted mt-3 text-[12px] leading-snug">{legend.note}</p>
+        <p className="text-muted mt-3 text-[13px] leading-snug">{legend.note}</p>
       </>
     </div>
   );

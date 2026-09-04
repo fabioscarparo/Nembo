@@ -139,10 +139,10 @@ body {
   color: var(--fg);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  /* A long press on a control is a press, not a text selection. Without this,
-     holding the timeline's clock or a pill's label raises iOS's callout menu
-     and paints the word blue — on a slider, mid-drag. None of this chrome is
-     prose; the panels, which are, opt back in below. */
+  /* A long press is a press, not a text selection. Without this, holding the
+     timeline's clock, a pill's label or a panel's text raises iOS's callout
+     menu and paints the word blue — on a slider, mid-drag. Inherited, so it
+     covers the whole app: none of it is a document to be read and quoted. */
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
@@ -566,15 +566,6 @@ body {
    in a single frame reads as a bug. `visibility` carries the closed state so
    it leaves the tab order and the accessibility tree, and is switched with a
    delay on the way out so it waits for the fade rather than cutting it. */
-/* The panels are the app's only prose — the legend's explanations, the
-   credits and their links. Selection is worth having there, and the callout
-   is how iOS offers "copy link" on an anchor. */
-.dock-panel {
-  -webkit-touch-callout: default;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
 .dock-panel {
   opacity: 0;
   visibility: hidden;

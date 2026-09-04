@@ -138,7 +138,7 @@ function Settings({
       role="group"
       aria-labelledby="settings-title"
     >
-      <div id="settings-title" className="text-fg text-[13px] font-medium">
+      <div id="settings-title" className="text-fg text-[14px] font-medium">
         Impostazioni
       </div>
 
@@ -150,9 +150,9 @@ function Settings({
       <div className="mt-3 flex items-center justify-between gap-3">
         <span
           id="settings-sound"
-          className="text-fg-soft flex min-w-0 items-center gap-2 text-[12px]"
+          className="text-fg-soft flex min-w-0 items-center gap-2 text-[13px]"
         >
-          <VolumeHigh size={14} className="text-muted shrink-0" aria-hidden />
+          <VolumeHigh size={15} className="text-muted shrink-0" aria-hidden />
           Suoni
         </span>
         <button
@@ -171,9 +171,9 @@ function Settings({
       <div className="mt-3 flex items-center justify-between gap-3">
         <span
           id="settings-haptics"
-          className="text-fg-soft flex min-w-0 items-center gap-2 text-[12px]"
+          className="text-fg-soft flex min-w-0 items-center gap-2 text-[13px]"
         >
-          <Mobile size={14} className="text-muted shrink-0" aria-hidden />
+          <Mobile size={15} className="text-muted shrink-0" aria-hidden />
           Vibrazione
         </span>
         <button
@@ -195,9 +195,9 @@ function Settings({
       <div className="mt-3 flex items-center justify-between gap-3">
         <span
           id="settings-theme"
-          className="text-fg-soft flex shrink-0 items-center gap-2 text-[12px]"
+          className="text-fg-soft flex shrink-0 items-center gap-2 text-[13px]"
         >
-          <Palette size={14} className="text-muted shrink-0" aria-hidden />
+          <Palette size={15} className="text-muted shrink-0" aria-hidden />
           Tema
         </span>
         <SlidingTabs
@@ -205,14 +205,14 @@ function Settings({
           value={theme}
           onPick={onPickTheme}
           labelledBy="settings-theme"
-          className="t-tabs-fill min-w-0 flex-1 text-[10px] font-medium"
+          className="t-tabs-fill min-w-0 flex-1 text-[11px] font-medium"
         />
       </div>
 
       {/* `rel="noreferrer"` implies `noopener`. Without it the opened page
           receives a live `window.opener` handle and can navigate this one. */}
-      <p className="panel-credit text-fg-soft text-[12px]">
-        <Personalcard size={14} className="text-muted shrink-0" aria-hidden />
+      <p className="panel-credit text-fg-soft text-[13px]">
+        <Personalcard size={15} className="text-muted shrink-0" aria-hidden />
         <span>
           Creato da{" "}
           <a href="https://fscarparo.com" target="_blank" rel="noreferrer">
@@ -221,8 +221,8 @@ function Settings({
         </span>
       </p>
 
-      <p className="panel-credit text-fg-soft text-[12px]">
-        <GithubMark size={14} className="text-muted shrink-0" />
+      <p className="panel-credit text-fg-soft text-[13px]">
+        <GithubMark size={15} className="text-muted shrink-0" />
         <span>
           Repository{" "}
           <a href={REPO} target="_blank" rel="noreferrer">
