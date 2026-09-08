@@ -177,6 +177,49 @@ function grade([r, g, b]: [number, number, number]): [number, number, number] {
  * visibly a different picture. Agreeing with the source matters more than
  * looking tidy — this is an instrument before it is a graphic.
  */
+/**
+ * The alpha byte the palette gives a value, on its own.
+ *
+ * Split out of buildLut because paintFloor needs the same answer without the
+ * colours: the crop has to agree with what will actually be drawn, and two
+ * copies of this interpolation would eventually disagree.
+ */
+function alphaByte(stops: Stop[], v: number): number {
+  if (v < stops[0].at) return 0;
+  const hi = stops.findIndex((s) => s.at > v);
+  if (hi === -1) return Math.round(stops[stops.length - 1].alpha * 255);
+  const lo = hi - 1;
+  const span = stops[hi].at - stops[lo].at;
+  const t = span > 0 ? (v - stops[lo].at) / span : 0;
+  const f = smoothstep(t);
+  return Math.round((stops[lo].alpha + (stops[hi].alpha - stops[lo].alpha) * f) * 255);
+}
+
+/**
+ * The smallest byte value this product's palette puts any pixel down for.
+ *
+ * signalBox crops to this, and renderField draws only the crop, so it has to
+ * be the palette's own answer: a byte below it is transparent by
+ * construction, and a byte above it is echo that would otherwise be cut off
+ * at the rectangle's edge.
+ *
+ * Per product, necessarily — that was the bug. A byte spans each product's
+ * own range, so one shared threshold is not one threshold: 21 means 4.9 dBZ
+ * against VMI's 0-60, but 8.2 mm/h against SRI's 0-100 and 16.5 mm against
+ * SRT1's 0-200. Rain rate and accumulation were being cropped to their
+ * heaviest cores, and a field of ordinary rain produced no box at all.
+ */
+export function paintFloor(product: Product): number {
+  const stops = RAMPS[product.key];
+  if (!stops?.length) return 1;
+  for (let i = 1; i < 256; i++) {
+    if (alphaByte(stops, decodeValue(product, i)) > 0) return i;
+  }
+  /* Nothing in this palette is ever visible — crop to nothing rather than to
+     everything. */
+  return 255;
+}
+
 export function buildLut(product: Product, stops: Stop[]): Uint8Array {
   const lut = new Uint8Array(256 * 4);
   const colors = stops.map((s) => readToken(s.token));
@@ -194,7 +237,7 @@ export function buildLut(product: Product, stops: Stop[]): Uint8Array {
       lut[o] = colors[last][0];
       lut[o + 1] = colors[last][1];
       lut[o + 2] = colors[last][2];
-      lut[o + 3] = Math.round(stops[last].alpha * 255);
+      lut[o + 3] = alphaByte(stops, v);
       continue;
     }
 
@@ -212,9 +255,7 @@ export function buildLut(product: Product, stops: Stop[]): Uint8Array {
     lut[o] = Math.round(r * 255);
     lut[o + 1] = Math.round(g * 255);
     lut[o + 2] = Math.round(b * 255);
-    lut[o + 3] = Math.round(
-      (stops[lo].alpha + (stops[hi].alpha - stops[lo].alpha) * f) * 255,
-    );
+    lut[o + 3] = alphaByte(stops, v);
   }
 
   return lut;

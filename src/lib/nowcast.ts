@@ -22,6 +22,7 @@
  */
 
 import { type Product, PRODUCTS, type ProductKey, hasTile } from "./dpc";
+import { paintFloor } from "./colormap";
 import { currentLut, fetchTile } from "./tiles";
 import { type Steering, steeringAt } from "./wind";
 import {
@@ -188,7 +189,7 @@ async function stitch(
     }
   }
 
-  return any ? { value, mask, box: signalBox(value, mask) } : null;
+  return any ? { value, mask, box: signalBox(value, mask, paintFloor(product)) } : null;
 }
 
 /** One observation, from cache or from the network, never twice at once. */

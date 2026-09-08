@@ -14,7 +14,6 @@ import {
   DOWN,
   DW,
   H,
-  SIGNAL_FLOOR,
   TILE,
   W,
   X0,
@@ -46,14 +45,24 @@ export type Field = { value: Uint8Array; mask: Uint8Array; box: Box | null };
  * to the box, and on a typical day the box is a few per cent of the field.
  * It costs one pass over 2.29 M pixels per observation, which is paid once
  * and saves that much work many times over.
+ *
+ * `floor` is the caller's, not a shared constant, and must come from the
+ * product's own palette: a byte spans each product's range, so one fixed
+ * threshold means 4.9 dBZ on VMI and 16.5 mm on SRT1. Read as a constant it
+ * cropped rain rate and accumulation to their heaviest cores and cut the rest
+ * of the echo off at the rectangle's edge. See paintFloor in colormap.ts.
  */
-export function signalBox(value: Uint8Array, mask: Uint8Array): Box | null {
+export function signalBox(
+  value: Uint8Array,
+  mask: Uint8Array,
+  floor: number,
+): Box | null {
   let x0 = W, y0 = H, x1 = -1, y1 = -1;
   for (let y = 0; y < H; y++) {
     const row = y * W;
     for (let x = 0; x < W; x++) {
       const i = row + x;
-      if (!mask[i] || value[i] < SIGNAL_FLOOR) continue;
+      if (!mask[i] || value[i] < floor) continue;
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;
       if (y < y0) y0 = y;
