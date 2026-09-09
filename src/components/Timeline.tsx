@@ -234,6 +234,12 @@ export default function Timeline({
    *   dom high with changes=0  it is tracking, React is not being told
    *   dx small                 the finger did not cross a step
    *
+   * `gap` is how far the press landed from the thumb, in CSS pixels. iOS only
+   * begins a range drag on the thumb itself, and this one is 3px wide, so a
+   * large gap on the failing gestures and a small one on the rest would say
+   * the control was never grabbed. One getBoundingClientRect per gesture, at
+   * press, not per move.
+   *
    * `dom` counts transitions of the input's own value property, read on each
    * move: a property read, no layout. `dx` is the travel in client pixels,
    * from the event coordinates, for the same reason — getBoundingClientRect
@@ -257,6 +263,7 @@ export default function Timeline({
     lastDom: "",
     xMin: 0,
     xMax: 0,
+    gap: 0,
   });
 
   const traceEnd = useCallback(
@@ -268,6 +275,7 @@ export default function Timeline({
         dom: g.dom,
         changes: g.changes,
         dx: Math.round(g.xMax - g.xMin),
+        gap: g.gap,
         /* Whether the element still owns the pointer. A drag that stops
            tracking because capture went elsewhere reports cap=no here. */
         cap: e.currentTarget.hasPointerCapture(e.pointerId) ? "yes" : "no",
@@ -508,21 +516,28 @@ export default function Timeline({
                is live — and the scrub feels mute until the second frame. */
             onPointerDown={(e) => {
               if (tracing.current) {
+                const el = e.currentTarget;
+                const box = el.getBoundingClientRect();
+                const span = Number(el.max) || 1;
+                /* Within half the thumb's width, since the thumb is 3px. */
+                const thumbX = box.left + (Number(el.value) / span) * box.width;
                 gesture.current = {
                   moves: 0,
                   changes: 0,
                   from: index,
                   dom: 0,
-                  lastDom: e.currentTarget.value,
+                  lastDom: el.value,
                   xMin: e.clientX,
                   xMax: e.clientX,
+                  gap: Math.round(Math.abs(e.clientX - thumbX)),
                 };
                 /* Computed, not the stylesheet's: a device on stale cached
                    CSS reports ta=auto here. */
                 trace("scrub.down", {
                   type: e.pointerType,
-                  ta: getComputedStyle(e.currentTarget).touchAction,
+                  ta: getComputedStyle(el).touchAction,
                   index,
+                  gap: gesture.current.gap,
                 });
               }
               sound.prime();
