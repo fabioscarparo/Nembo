@@ -397,6 +397,48 @@ export default function Timeline({
     },
     [index, tickOf],
   );
+  /* Applying an index, wherever it came from. The pointer path below and the
+     input's own change event — which is now only the keyboard — both land
+     here, so the wake, the detent and the caller are driven identically. */
+  const applyIndex = useCallback(
+    (at: number) => {
+      const next = frames[at];
+      if (next === undefined || next === value) return;
+      // Same test rippleTo lights on, so sound and wake agree.
+      const crossed = tickOf(at) !== tickOf(index);
+      rippleTo(at);
+      if (crossed) detent();
+      onChange(next);
+    },
+    [frames, value, index, tickOf, rippleTo, detent, onChange],
+  );
+
+  /* The value read off the pointer rather than left to the native thumb drag.
+   *
+   * iOS starts a range drag only when the touch lands near the thumb, and this
+   * thumb is 3px wide. Measured on device: every gesture beginning within 12px
+   * of it tracked, every one beginning 22px or further away delivered its
+   * pointermove events and never moved the value. Leave the slider at either
+   * end and the thumb sits on the edge, so the next press lands far from it —
+   * which is why the control went dead after the first drag.
+   *
+   * Reading the position here also gives press-to-jump, which the native
+   * control does with a mouse and not with a finger. The element stays a real
+   * range for the keyboard and for assistive technology; only the pointer
+   * path is ours. */
+  const dragging = useRef(false);
+
+  const seek = useCallback(
+    (el: HTMLInputElement, clientX: number) => {
+      const box = el.getBoundingClientRect();
+      const last = frames.length - 1;
+      if (box.width <= 0 || last < 1) return;
+      const t = Math.min(1, Math.max(0, (clientX - box.left) / box.width));
+      applyIndex(Math.round(t * last));
+    },
+    [applyIndex, frames.length],
+  );
+
   const ahead = index > nowIndex;
   const minutesAhead = Math.round((value - frames[nowIndex]) / 60_000);
 
@@ -542,9 +584,16 @@ export default function Timeline({
               }
               sound.prime();
               beginScrub();
+              dragging.current = true;
+              /* Explicit rather than relying on the implicit capture a touch
+                 gets: with a mouse there is none, and the drag has to survive
+                 the pointer leaving the pill. */
+              e.currentTarget.setPointerCapture(e.pointerId);
+              seek(e.currentTarget, e.clientX);
             }}
             /* Counted, not logged. See the tracing block above. */
             onPointerMove={(e) => {
+              if (dragging.current) seek(e.currentTarget, e.clientX);
               if (!tracing.current) return;
               const g = gesture.current;
               g.moves += 1;
@@ -561,29 +610,33 @@ export default function Timeline({
                has pointer capture, so both are routed back here. */
             onPointerUp={(e) => {
               if (tracing.current) traceEnd("scrub.up", e);
+              dragging.current = false;
               sound.release();
               endScrub();
             }}
             onPointerCancel={(e) => {
               if (tracing.current) traceEnd("scrub.CANCEL", e);
+              dragging.current = false;
               sound.release();
               endScrub();
             }}
             /* A capture lost to a system gesture fires neither handler above. */
             onLostPointerCapture={(e) => {
               if (tracing.current) traceEnd("scrub.lostcapture", e);
+              dragging.current = false;
               endScrub();
             }}
+            /* Arrow keys, Home and End. A pointer drag is handled above and
+               reaches the same applyIndex, so a native change that repeats it
+               is dropped by its own no-op test. */
             onChange={(e) => {
               if (tracing.current) gesture.current.changes += 1;
-              const at = Number(e.currentTarget.value);
-              const next = frames[at];
-              if (next === value) return;
-              // Same test rippleTo lights on, so sound and wake agree.
-              const crossed = tickOf(at) !== tickOf(index);
-              rippleTo(at);
-              if (crossed) detent();
-              onChange(next);
+              /* The pointer path owns the value while a drag is live. Where
+                 the native drag works it computes the same index to within a
+                 rounding boundary, and letting both write meant the two could
+                 disagree by one step and oscillate. */
+              if (dragging.current) return;
+              applyIndex(Number(e.currentTarget.value));
             }}
           />
         </div>
