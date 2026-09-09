@@ -49,6 +49,58 @@ The interface supports **light, dark and system themes**, along with the option 
 
 ---
 
+## Screenshots
+
+### Desktop
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-dark.webp" alt="Nembo in a desktop browser, dark theme: precipitation over central and northern Italy, with the timeline along the bottom">
+      <br><sub>Dark</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-light.webp" alt="The same view in the light theme">
+      <br><sub>Light</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-dark-legend.webp" alt="Dark theme with the legend panel open, listing the reflectivity bands in dBZ">
+      <br><sub>Legend</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-light-legend.webp" alt="Light theme with the legend panel open">
+      <br><sub>Legend</sub>
+    </td>
+  </tr>
+</table>
+
+### Mobile
+
+<table>
+  <tr>
+    <td align="center" width="25%">
+      <img src="assets/screenshots/mobile-dark.webp" alt="Nembo on a phone, dark theme, showing the place name and current conditions above the map">
+      <br><sub>Dark</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/screenshots/mobile-dark-legend.webp" alt="Dark theme on a phone with the legend panel open">
+      <br><sub>Legend</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/screenshots/mobile-light.webp" alt="Nembo on a phone, light theme">
+      <br><sub>Light</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/screenshots/mobile-light-legend.webp" alt="Light theme on a phone with the legend panel open">
+      <br><sub>Legend</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## How it works
 
 ### The radar data
@@ -96,7 +148,9 @@ src/lib/
   grid.ts            domain geometry (zoom, tiles, lat/lon conversions)
   flow.ts            motion estimation: consensus + dense optical flow
   motion.worker.ts   the same estimation, run off the main thread
-  nowcast.ts         observations, cache, warping, frame rendering
+  field.ts           frame arithmetic: boxes, trajectories, warping, painting
+  render.worker.ts   the same arithmetic, run off the main thread
+  nowcast.ts         observations, cache, sequence, clients for both workers
   dpc.ts             DPC service contract, products, tile coverage
   tiles.ts           tile fetching and decoding
   colormap.ts        palette built from the CSS tokens
@@ -104,18 +158,20 @@ src/lib/
   place.ts           reverse geocoding and current conditions
   visibility.ts      timers that stop when the page is not visible
   basemap.ts         CARTO style with a local fallback
+  trace.ts           diagnostic trace, read on the device with ?debug=1
   theme.ts
   sound.ts
   haptics.ts         user preferences and feedback
 
 src/components/
   RadarMap.tsx       main component, map and interface
-  Timeline.tsx       timeline, ruler and playback
-  Dock.tsx           quantity selector, legend and settings
+  Timeline.tsx       timeline, ruler, playback and back-to-now
+  Dock.tsx           quantity selector and the legend button
   Settings.tsx       preferences panel
   Legend.tsx         colour scale
   PlacePill.tsx      place and current conditions
   SlidingTabs.tsx    shared tab control
+  TracePanel.tsx     renders the trace over the map
 ```
 
 ---
