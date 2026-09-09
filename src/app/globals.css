@@ -471,15 +471,12 @@ body {
   pointer-events: none;
 }
 
-/* `touch-action: none` because this control owns its gesture.
-   
-   Left at the default `auto`, a touch drag is one the browser is still
-   entitled to claim for panning or zooming, and the way it claims one is to
-   fire pointercancel and stop delivering moves. That handler calls endScrub,
-   so on a touch device the press would open the row and the first sideways
-   movement would close it again with the value never having changed. There is
-   nothing to pan here anyway — the document does not scroll, and MapLibre
-   declares the same thing on its own canvas container. */
+/* The default `auto` lets the browser claim a touch drag for panning or
+   zooming, which it does by firing pointercancel and stopping pointermove.
+   onPointerCancel calls endScrub, so the row opened on press and closed on the
+   first sideways movement with the value unchanged. Nothing here pans: the
+   document does not scroll, and MapLibre sets the same on its canvas
+   container. */
 .tick-slider input[type="range"] {
   position: absolute;
   inset: 0;

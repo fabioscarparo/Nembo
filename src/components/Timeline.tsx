@@ -32,6 +32,7 @@ import type { MotionSource } from "@/lib/nowcast";
 import { useHaptics } from "@/lib/haptics";
 import { usePageVisible, useVisibleInterval } from "@/lib/visibility";
 import { useSound } from "@/lib/sound";
+import { debugRequested, trace } from "@/lib/trace";
 
 type Props = {
   /** Every instant on the axis, oldest first, one a minute. Absolute times
@@ -177,6 +178,9 @@ export default function Timeline({
   }, [haptics, sound]);
 
   const index = Math.max(0, frames.indexOf(value));
+  /* traceEnd reports the index at release, not at handler creation. */
+  const indexRef = useRef(index);
+  indexRef.current = index;
   const nowIndex = observedCount - 1;
 
   /* One counter per tick. The thumb does not light ticks it is near — it
@@ -217,6 +221,34 @@ export default function Timeline({
   /* The resting width is whatever the buttons leave over, so unlike the
      expanded one it cannot be derived. Remembered at press instead. */
   const restingTrack = useRef(0);
+
+  /* Pointer tracing for the scrub gesture, behind `?debug=1`.
+   *
+   * Separates two failures that look the same on screen: the browser taking
+   * the gesture over (scrub.CANCEL mid-drag) and moves never being delivered
+   * (scrub.up with moves=0). Neither throws, and a phone has no console — see
+   * lib/trace.ts.
+   *
+   * Moves are counted, not logged: they arrive at refresh rate, would pass
+   * MAX_LINES within one gesture, and trace() writes to localStorage on every
+   * call. */
+  const tracing = useRef(false);
+  useEffect(() => {
+    tracing.current = debugRequested();
+  }, []);
+
+  const gesture = useRef({ moves: 0, changes: 0, from: 0 });
+
+  const traceEnd = useCallback((event: string, type: string) => {
+    const g = gesture.current;
+    trace(event, {
+      type,
+      moves: g.moves,
+      changes: g.changes,
+      from: g.from,
+      to: indexRef.current,
+    });
+  }, []);
 
   const fitTicks = useCallback(
     (width: number) => {
@@ -448,24 +480,44 @@ export default function Timeline({
                arrives a few milliseconds later. Without it the browser
                swallows that first tick — the one that tells you the control
                is live — and the scrub feels mute until the second frame. */
-            onPointerDown={() => {
+            onPointerDown={(e) => {
+              if (tracing.current) {
+                gesture.current = { moves: 0, changes: 0, from: index };
+                /* Computed, not the stylesheet's: a device on stale cached
+                   CSS reports ta=auto here. */
+                trace("scrub.down", {
+                  type: e.pointerType,
+                  ta: getComputedStyle(e.currentTarget).touchAction,
+                  index,
+                });
+              }
               sound.prime();
               beginScrub();
+            }}
+            /* Counted, not logged. See the tracing block above. */
+            onPointerMove={() => {
+              if (tracing.current) gesture.current.moves += 1;
             }}
             /* Letting go, once. `onPointerUp` misses the drag that ends off
                the element and the gesture the browser cancels, and the range
                has pointer capture, so both are routed back here. */
-            onPointerUp={() => {
+            onPointerUp={(e) => {
+              if (tracing.current) traceEnd("scrub.up", e.pointerType);
               sound.release();
               endScrub();
             }}
-            onPointerCancel={() => {
+            onPointerCancel={(e) => {
+              if (tracing.current) traceEnd("scrub.CANCEL", e.pointerType);
               sound.release();
               endScrub();
             }}
             /* A capture lost to a system gesture fires neither handler above. */
-            onLostPointerCapture={() => endScrub()}
+            onLostPointerCapture={(e) => {
+              if (tracing.current) traceEnd("scrub.lostcapture", e.pointerType);
+              endScrub();
+            }}
             onChange={(e) => {
+              if (tracing.current) gesture.current.changes += 1;
               const at = Number(e.currentTarget.value);
               const next = frames[at];
               if (next === value) return;
