@@ -18,9 +18,11 @@
 /** Where the trace lives between sessions. */
 const KEY = "nembo:trace";
 
-/** Lines kept. Sized for a cold start plus a spell of poking at the unit
- *  switcher afterwards, which is how the failure is currently reproduced. */
-const MAX_LINES = 160;
+/** Lines kept. Raised from 160: the scrub investigation needs several
+ *  gestures, and each one sits behind the paint lines its own frames produce,
+ *  which arrive dozens to a second. At 160 the gesture that failed had already
+ *  been pushed past the cap by the ones that worked. */
+const MAX_LINES = 400;
 
 /** Paints recorded. Beyond a cold start and a few dozen deliberate
  *  interactions there is only scrubbing left, which teaches nothing. */

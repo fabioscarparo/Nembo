@@ -224,10 +224,20 @@ export default function Timeline({
 
   /* Pointer tracing for the scrub gesture, behind `?debug=1`.
    *
-   * Separates two failures that look the same on screen: the browser taking
-   * the gesture over (scrub.CANCEL mid-drag) and moves never being delivered
-   * (scrub.up with moves=0). Neither throws, and a phone has no console — see
-   * lib/trace.ts.
+   * A drag that does nothing looks the same on screen whatever caused it, and
+   * a phone has no console — see lib/trace.ts. The counters separate the
+   * cases:
+   *
+   *   moves=0                  the pointer stream stopped
+   *   scrub.CANCEL             the browser took the gesture over
+   *   dom=0 with moves high    the native range is not tracking the drag
+   *   dom high with changes=0  it is tracking, React is not being told
+   *   dx small                 the finger did not cross a step
+   *
+   * `dom` counts transitions of the input's own value property, read on each
+   * move: a property read, no layout. `dx` is the travel in client pixels,
+   * from the event coordinates, for the same reason — getBoundingClientRect
+   * inside a drag is a forced layout per frame.
    *
    * Moves are counted, not logged: they arrive at refresh rate, would pass
    * MAX_LINES within one gesture, and trace() writes to localStorage on every
@@ -237,17 +247,33 @@ export default function Timeline({
     tracing.current = debugRequested();
   }, []);
 
-  const gesture = useRef({ moves: 0, changes: 0, from: 0 });
+  const gesture = useRef({
+    moves: 0,
+    changes: 0,
+    from: 0,
+    /* Transitions of the DOM value, and the value last seen, so a transition
+       is counted once rather than on every move that follows it. */
+    dom: 0,
+    lastDom: "",
+    xMin: 0,
+    xMax: 0,
+  });
 
-  const traceEnd = useCallback((event: string, type: string) => {
-    const g = gesture.current;
-    trace(event, {
-      type,
-      moves: g.moves,
-      changes: g.changes,
-      from: g.from,
-      to: indexRef.current,
-    });
+  const traceEnd = useCallback(
+    (event: string, e: React.PointerEvent<HTMLInputElement>) => {
+      const g = gesture.current;
+      trace(event, {
+        type: e.pointerType,
+        moves: g.moves,
+        dom: g.dom,
+        changes: g.changes,
+        dx: Math.round(g.xMax - g.xMin),
+        /* Whether the element still owns the pointer. A drag that stops
+           tracking because capture went elsewhere reports cap=no here. */
+        cap: e.currentTarget.hasPointerCapture(e.pointerId) ? "yes" : "no",
+        from: g.from,
+        to: indexRef.current,
+      });
   }, []);
 
   const fitTicks = useCallback(
@@ -482,7 +508,15 @@ export default function Timeline({
                is live — and the scrub feels mute until the second frame. */
             onPointerDown={(e) => {
               if (tracing.current) {
-                gesture.current = { moves: 0, changes: 0, from: index };
+                gesture.current = {
+                  moves: 0,
+                  changes: 0,
+                  from: index,
+                  dom: 0,
+                  lastDom: e.currentTarget.value,
+                  xMin: e.clientX,
+                  xMax: e.clientX,
+                };
                 /* Computed, not the stylesheet's: a device on stale cached
                    CSS reports ta=auto here. */
                 trace("scrub.down", {
@@ -495,25 +529,34 @@ export default function Timeline({
               beginScrub();
             }}
             /* Counted, not logged. See the tracing block above. */
-            onPointerMove={() => {
-              if (tracing.current) gesture.current.moves += 1;
+            onPointerMove={(e) => {
+              if (!tracing.current) return;
+              const g = gesture.current;
+              g.moves += 1;
+              if (e.clientX < g.xMin) g.xMin = e.clientX;
+              if (e.clientX > g.xMax) g.xMax = e.clientX;
+              const v = e.currentTarget.value;
+              if (v !== g.lastDom) {
+                g.dom += 1;
+                g.lastDom = v;
+              }
             }}
             /* Letting go, once. `onPointerUp` misses the drag that ends off
                the element and the gesture the browser cancels, and the range
                has pointer capture, so both are routed back here. */
             onPointerUp={(e) => {
-              if (tracing.current) traceEnd("scrub.up", e.pointerType);
+              if (tracing.current) traceEnd("scrub.up", e);
               sound.release();
               endScrub();
             }}
             onPointerCancel={(e) => {
-              if (tracing.current) traceEnd("scrub.CANCEL", e.pointerType);
+              if (tracing.current) traceEnd("scrub.CANCEL", e);
               sound.release();
               endScrub();
             }}
             /* A capture lost to a system gesture fires neither handler above. */
             onLostPointerCapture={(e) => {
-              if (tracing.current) traceEnd("scrub.lostcapture", e.pointerType);
+              if (tracing.current) traceEnd("scrub.lostcapture", e);
               endScrub();
             }}
             onChange={(e) => {
