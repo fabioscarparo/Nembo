@@ -164,20 +164,6 @@ function grade([r, g, b]: [number, number, number]): [number, number, number] {
 /* ── LUT ────────────────────────────────────────────────────── */
 
 /**
- * 256 RGBA entries, indexed by the tile's red byte. Straight (not
- * premultiplied) alpha: the shader premultiplies when it blends two frames,
- * and doing it twice darkens the crossfade.
- *
- * Interpolation is smoothstepped and the result graded with the DPC's own
- * constants, so a given dBZ resolves to the colour their viewer draws for it.
- *
- * An earlier version quantised the value into 5 dBZ bands first, to answer a
- * request for crisper edges. It did look sharper, but every pixel then sat a
- * band away from the reference: side by side with the official radar it was
- * visibly a different picture. Agreeing with the source matters more than
- * looking tidy — this is an instrument before it is a graphic.
- */
-/**
  * The alpha byte the palette gives a value, on its own.
  *
  * Split out of buildLut because paintFloor needs the same answer without the
@@ -220,6 +206,20 @@ export function paintFloor(product: Product): number {
   return 255;
 }
 
+/**
+ * 256 RGBA entries, indexed by the tile's red byte. Straight (not
+ * premultiplied) alpha: the shader premultiplies when it blends two frames,
+ * and doing it twice darkens the crossfade.
+ *
+ * Interpolation is smoothstepped and the result graded with the DPC's own
+ * constants, so a given dBZ resolves to the colour their viewer draws for it.
+ *
+ * An earlier version quantised the value into 5 dBZ bands first, to answer a
+ * request for crisper edges. It did look sharper, but every pixel then sat a
+ * band away from the reference: side by side with the official radar it was
+ * visibly a different picture. Agreeing with the source matters more than
+ * looking tidy — this is an instrument before it is a graphic.
+ */
 export function buildLut(product: Product, stops: Stop[]): Uint8Array {
   const lut = new Uint8Array(256 * 4);
   const colors = stops.map((s) => readToken(s.token));

@@ -226,7 +226,7 @@ function scratch() {
 
 
 /** Three, because the deepest case needs exactly that: two warps feeding one
- *  blend. A fourth would only be reachable if `fieldAt` grew a case. */
+ *  blend. A fourth would need `compose` to grow a case. */
 export const SCRATCH = [scratch(), scratch(), scratch()] as const;
 
 /**

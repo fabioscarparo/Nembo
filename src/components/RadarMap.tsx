@@ -374,11 +374,6 @@ export default function RadarMap() {
     setPaletteEpoch(lutEpoch());
   }, [product]);
 
-  /**
-   * Idempotent: adds the radar source and layer if the current style lacks
-   * them. Called after every style load, because setStyle() discards every
-   * source and layer the style did not declare — the radar included.
-   */
   /* Wraps a freshly fetched style so the radar is part of it before MapLibre
      ever sees it. Used both when the map is built and when the theme swaps the
      whole style out. */
@@ -395,6 +390,11 @@ export default function RadarMap() {
     [],
   );
 
+  /**
+   * Idempotent: adds the radar source and layer if the current style lacks
+   * them. Called after every style load, because setStyle() discards every
+   * source and layer the style did not declare — the radar included.
+   */
   const applyRadar = useCallback((m: MapLibreMap, style?: StyleSpecification) => {
     if (m.getLayer(RADAR_LAYER)) return;
 
@@ -516,6 +516,8 @@ export default function RadarMap() {
       pin.current?.remove();
       pin.current = null;
       pinned.current = false;
+      shown.current?.close();
+      shown.current = null;
       created?.remove();
       map.current = null;
     };
@@ -662,6 +664,22 @@ export default function RadarMap() {
   const everPainted = useRef(false);
   const coldRetries = useRef(0);
 
+  /* The bitmap MapLibre is currently holding.
+  
+     ImageSource.updateImage stores the image and uploads it to a texture on
+     the next render pass, so it cannot be closed on the way in — but nothing
+     closes it on the way out either, and at the loop's cadence that is ten
+     multi-megabyte bitmaps a second left to the collector. Releasing the
+     previous one as the next is handed over is safe: by then either it has
+     been uploaded, or it was superseded before it ever could be — either way
+     `updateImage` has already replaced the source's own reference. */
+  const shown = useRef<ImageBitmap | null>(null);
+
+  const handOver = useCallback((next: ImageBitmap) => {
+    shown.current?.close();
+    shown.current = next;
+  }, []);
+
   /**
    * Renders the newest requested frame, and only that one.
    *
@@ -761,9 +779,14 @@ export default function RadarMap() {
               /* Coordinates travel with the image: the crop moves and resizes
                  as the weather does, and the source is told where it belongs. */
               src.updateImage(painted);
+              handOver(painted.image);
             } else {
               // Nothing to draw. A single transparent pixel clears the layer.
               src.updateImage({ url: BLANK });
+              /* Deliberately not released here. A url update reloads
+                 asynchronously, so the source still points at the old bitmap
+                 until that resolves — closing it now can leave `prepare` to
+                 upload a closed one. The next real frame takes it. */
             }
             everPainted.current = true;
             coldRetries.current = 0;
@@ -783,7 +806,7 @@ export default function RadarMap() {
         painting.current = false;
       }
     },
-    [applyRadar],
+    [applyRadar, handOver],
   );
 
   useEffect(() => {
@@ -823,14 +846,20 @@ export default function RadarMap() {
          style swap rather than a paint-property edit. Every source and layer
          goes with it — the `style.load` handler puts the radar back, and
          bumping the token makes the next paint repaint it in the new palette. */
-      resolveStyle(isDark()).then((raw) => {
-        if (map.current !== m) return;
-        const style = dressStyle(raw);
-        /* setStyle drops every source and layer; `style.load` puts the radar
-           back and bumps the epoch, which repaints the frame in the new
-           palette without recomputing any motion. */
-        m.setStyle(style);
-      });
+      resolveStyle(isDark())
+        .then((raw) => {
+          if (map.current !== m) return;
+          const style = dressStyle(raw);
+          /* setStyle drops every source and layer; `style.load` puts the radar
+             back and bumps the epoch, which repaints the frame in the new
+             palette without recomputing any motion. */
+          m.setStyle(style);
+        })
+        /* resolveStyle already falls back to the bundled coastline when the
+           network fails, so a rejection here is a bug rather than an outage —
+           but unhandled it would surface as an unhandled rejection from a
+           theme toggle that otherwise worked. The old palette stays. */
+        .catch(() => {});
     });
   }, [refreshPalette, dressStyle]);
 

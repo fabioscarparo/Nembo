@@ -341,7 +341,15 @@ export default function Timeline({
       });
     }
 
+    let settled = false;
     const done = () => {
+      /* Both paths below can fire — a transition that runs and a timeout that
+         was already scheduled — and the second must not undo the refit the
+         first did. */
+      if (settled) return;
+      settled = true;
+      pill.removeEventListener("transitionend", done);
+      window.clearTimeout(timer);
       locked.current = false;
       /* One last fit against the real width, in case the viewport changed
          while the row was open and the remembered figure is stale. Normally
@@ -351,8 +359,11 @@ export default function Timeline({
     };
     pill.addEventListener("transitionend", done, { once: true });
     /* A transition that never runs — reduced motion, or a release in the same
-       frame as the press — would otherwise leave the lock on for good. */
-    window.setTimeout(done, 500);
+       frame as the press — would otherwise leave the lock on for good. When
+       it is the timeout that wins, `done` takes the listener off itself:
+       `once` only removes a listener that has fired, and one per gesture
+       accumulates on the same element. */
+    const timer = window.setTimeout(done, 500);
   }, [fitTicks, frames.length]);
 
   useLayoutEffect(() => {

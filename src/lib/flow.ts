@@ -197,21 +197,6 @@ export function downsample(field: CoarseSource): Coarse {
   return { value, mask };
 }
 
-/**
- * Seals a raw flow into a Motion, measuring the fastest vector in it once.
- *
- * `warp` needs that figure to know how far echo can be carried outside its
- * own box, and it used to recompute it on every call — which was invisible
- * at five hundred and sixty vectors and is not at thirty-five thousand:
- * measured, 0.53 ms against 0.008, and `fieldAt` warps twice for every
- * interpolated frame. The field does not change between frames, so the work
- * was pure waste. Computing it where the field is built costs nothing and
- * removes it from the hot path entirely.
- *
- * Compared on the square and rooted once at the end rather than through
- * Math.hypot per element: same answer, seven times faster, and this is the
- * one place the difference is worth the loss of clarity.
- */
 /** A field that carries nothing anywhere: the honest answer when neither the
  *  echo nor a model could say how the air is moving. */
 export function zeroMotion(): Motion {

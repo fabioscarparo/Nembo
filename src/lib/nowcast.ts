@@ -73,10 +73,6 @@ export type { Box, Corners, Field, Painted } from "./field";
 export { renderField } from "./field";
 
 
-
-
-
-
 /* ── Timeline shape ─────────────────────────────────────────
  * Thirty minutes either side of now, a frame a minute — the window 3BMeteo
  * shows, and about as far as advection stays defensible.
@@ -366,13 +362,6 @@ async function estimateOffThread(
 }
 
 
-
-
-
-
-
-
-
 /**
  * A motion field built from the steering flow instead of from the echo.
  *
@@ -427,8 +416,9 @@ type RenderReply = { id: number; image: ImageBitmap | null; coordinates?: Corner
  * `null` — the observations could not be assembled; retry.
  * `{ painted: null }` — they were, and hold nothing the palette would draw.
  *
- * fieldAt and renderField used to carry this distinction between them. Behind
- * one call it has to be explicit, or the cold-start retry fires on clear sky.
+ * Composing and painting used to be two calls, and the distinction fell out
+ * of which one returned null. Behind one call it has to be explicit, or the
+ * cold-start retry fires on clear sky.
  */
 export type Frame = { painted: Painted | null } | null;
 
@@ -611,24 +601,6 @@ export async function buildSequence(
   return { product, latest, motion, source };
 }
 
-/**
- * The field at any instant in the window, observed or not.
- *
- * Returns null while the observations it needs are still arriving, so a
- * caller can leave the previous frame on screen rather than blanking the map.
- */
-export async function fieldAt(
-  seq: Sequence,
-  time: number,
-): Promise<Field | null> {
-  const need = bracket(seq, time);
-  const [a, b] = await Promise.all([
-    observation(seq.product, need.aTime),
-    need.ahead ? Promise.resolve(null) : observation(seq.product, need.bTime),
-  ]);
-  return compose(a, b, need.aTime, need.step, seq.motion, time, need.ahead);
-}
-
 /** Which two observations an instant sits between. Separate from fetching
  *  them because paintAt needs the same answer to build the worker message. */
 export function bracket(seq: Sequence, time: number) {
@@ -642,8 +614,5 @@ export function bracket(seq: Sequence, time: number) {
 }
 
 /* ── Rendering ──────────────────────────────────────────────── */
-
-
-
 
 

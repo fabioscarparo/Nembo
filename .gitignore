@@ -7,9 +7,9 @@ next-env.d.ts
 .env*.local
 .vercel
 
-# Copiati da node_modules a ogni predev/prebuild (scripts/copy-worker.mjs)
+# Copied out of node_modules on every predev/prebuild — scripts/copy-worker.mjs
 public/maplibre-gl-worker.mjs
 public/maplibre-gl-shared.mjs
 
-# Configurazione locale degli strumenti di sviluppo
+# Local tooling configuration
 .claude

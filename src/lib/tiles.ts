@@ -146,7 +146,11 @@ export async function fetchTile(
   const { width: w, height: h } = bitmap;
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return null;
+  if (!ctx) {
+    // The bitmap is already decoded; leaving by this door still has to free it.
+    bitmap.close();
+    return null;
+  }
 
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(bitmap, 0, 0);
