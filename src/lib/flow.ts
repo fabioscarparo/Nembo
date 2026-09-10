@@ -8,7 +8,7 @@
  * bundler from having to resolve a cycle it cannot.
  */
 
-import { DH, DOWN, DW, SIGNAL_FLOOR, W } from "./grid";
+import { DH, DOWN, DW, W } from "./grid";
 
 /**
  * Where the motion came from, which is not a detail the interface can keep to
@@ -50,7 +50,7 @@ const BLOCKS_Y = Math.floor(DH / BLOCK);
  *  convection does and short of aliasing onto a neighbouring cell. */
 const SEARCH = 8;
 
-/* SIGNAL_FLOOR, declared above, is load-bearing here too. These tiles mark
+/* The echo floor the caller passes in is load-bearing here. These tiles mark
    the whole radar domain as valid and fill the dry parts with zero, so "has
    data" is true almost everywhere while "has an echo" is true for a twentieth
    of it. A block matched across the dry majority scores identically at every
@@ -472,6 +472,7 @@ function consensusFlow(
   a: Coarse,
   b: Coarse,
   minutes: number,
+  floor: number,
 ): { mu: number; mv: number; measured: boolean } {
   const found: { u: number; v: number; echo: number }[] = [];
 
@@ -485,7 +486,7 @@ function consensusFlow(
           const nx = bx * BLOCK + x;
           if (nx >= DW) break;
           const ni = ny * DW + nx;
-          if (b.mask[ni] && b.value[ni] >= SIGNAL_FLOOR) echo++;
+          if (b.mask[ni] && b.value[ni] >= floor) echo++;
         }
       }
       if (echo < MIN_SIGNAL) continue;
@@ -504,7 +505,7 @@ function consensusFlow(
             const ni = ny * DW + nx;
             const pi = py * DW + px;
             if (!b.mask[ni] || !a.mask[pi]) continue;
-            if (b.value[ni] < SIGNAL_FLOOR && a.value[pi] < SIGNAL_FLOOR) continue;
+            if (b.value[ni] < floor && a.value[pi] < floor) continue;
             sad += Math.abs(b.value[ni] - a.value[pi]);
             n++;
           }
@@ -587,8 +588,11 @@ export function estimateFromCoarse(
   b: Coarse,
   minutes: number,
   reference: { u: Float32Array; v: Float32Array } | null,
+  /* The caller's, not a shared constant: a byte spans each product's own
+     range. See echoFloorByte in dpc.ts. */
+  floor: number,
 ): { motion: Motion; source: MotionSource } {
-  const { mu, mv, measured } = consensusFlow(a, b, minutes);
+  const { mu, mv, measured } = consensusFlow(a, b, minutes, floor);
 
   /* The field every pixel is judged against. When the echo corroborated a
      consensus of its own, that is one vector for the whole country; when it
@@ -622,7 +626,7 @@ export function estimateFromCoarse(
       /* Nothing to see here, so nothing to say. Clear air still has to move
          somewhere — a cell drifting into a wall of zero motion would pile up
          against it — but the vector it moves by is borrowed, not measured. */
-      if (!b.mask[i] || b.value[i] < SIGNAL_FLOOR) {
+      if (!b.mask[i] || b.value[i] < floor) {
         u[i] = ru;
         v[i] = rv;
         continue;

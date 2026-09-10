@@ -920,7 +920,11 @@ export default function RadarMap() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    /* togglePlay, not []. It closes over `playing`, so an empty list pinned
+       this to the mount-time copy where playing was false: every press
+       computed `next = true`, and space could start the loop but never stop
+       it. Re-binding one keydown listener when the flag flips costs nothing. */
+  }, [togglePlay]);
 
   /* Where the focus came from, recorded on the root element.
    *

@@ -145,33 +145,33 @@ The project is organised by separating data acquisition and processing from the 
 
 ```text
 src/lib/
-  grid.ts            domain geometry (zoom, tiles, lat/lon conversions)
-  flow.ts            motion estimation: consensus + dense optical flow
-  motion.worker.ts   the same estimation, run off the main thread
-  field.ts           frame arithmetic: boxes, trajectories, warping, painting
-  render.worker.ts   the same arithmetic, run off the main thread
-  nowcast.ts         observations, cache, sequence, clients for both workers
-  dpc.ts             DPC service contract, products, tile coverage
-  tiles.ts           tile fetching and decoding
-  colormap.ts        palette built from the CSS tokens
-  wind.ts            steering wind from Open-Meteo
-  place.ts           reverse geocoding and current conditions
-  visibility.ts      timers that stop when the page is not visible
-  basemap.ts         CARTO style with a local fallback
-  trace.ts           diagnostic trace, read on the device with ?debug=1
-  theme.ts
-  sound.ts
-  haptics.ts         user preferences and feedback
+  grid.ts            zoom-7 domain, pixel/degree conversion, coarse grid
+  dpc.ts             service contract: tile URLs, product scales, coverage
+  tiles.ts           tile fetch and WebP decode to value plus no-data mask
+  nowcast.ts         observation cache, sequence assembly, worker clients
+  flow.ts            block-matched consensus vector, pyramidal Lucas-Kanade
+  motion.worker.ts   estimateFromCoarse off the main thread; message plumbing
+  field.ts           signal boxes, trajectory integration, warp, blend, paint
+  render.worker.ts   compose and renderField off the main thread
+  colormap.ts        256-entry RGBA lookup table built from the theme tokens
+  wind.ts            mass-weighted 850-500 hPa steering flow from Open-Meteo
+  place.ts           reverse geocoding and current conditions for a fix
+  visibility.ts      intervals and polls gated on document visibility
+  basemap.ts         CARTO vector style, with a bundled coastline fallback
+  trace.ts           bounded diagnostic log, persisted to localStorage
+  theme.ts           light/dark/system preference and its persistence
+  sound.ts           declarative synthesis of the interface's sound set
+  haptics.ts         vibration triggers and the shared feedback preference
 
 src/components/
-  RadarMap.tsx       main component, map and interface
-  Timeline.tsx       timeline, ruler, playback and back-to-now
-  Dock.tsx           quantity selector and the legend button
-  Settings.tsx       preferences panel
-  Legend.tsx         colour scale
-  PlacePill.tsx      place and current conditions
-  SlidingTabs.tsx    shared tab control
-  TracePanel.tsx     renders the trace over the map
+  RadarMap.tsx       map lifecycle, radar layer, and the application state
+  Timeline.tsx       frame axis, tick ruler, playback, pointer-driven scrub
+  Dock.tsx           product tabs and the legend toggle
+  Settings.tsx       sound, haptics and theme controls, plus attribution
+  Legend.tsx         per-product colour scale and its band thresholds
+  PlacePill.tsx      place name and conditions for the current fix
+  SlidingTabs.tsx    tab control with an animated selection pill
+  TracePanel.tsx     overlay rendering of the persisted trace
 ```
 
 ---

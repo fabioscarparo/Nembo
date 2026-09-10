@@ -21,9 +21,15 @@
  * which is why nothing here goes further — the same horizon 3BMeteo stops at.
  */
 
-import { type Product, PRODUCTS, type ProductKey, hasTile } from "./dpc";
+import {
+  type Product,
+  PRODUCTS,
+  type ProductKey,
+  echoFloorByte,
+  hasTile,
+} from "./dpc";
 import { paintFloor } from "./colormap";
-import { currentLut, fetchTile } from "./tiles";
+import { fetchTile } from "./tiles";
 import { type Steering, steeringAt } from "./wind";
 import {
   COLS,
@@ -32,7 +38,6 @@ import {
   DW,
   H,
   ROWS,
-  SIGNAL_FLOOR,
   TILE,
   W,
   X0,
@@ -47,12 +52,9 @@ import {
   type Field,
   type Painted,
   blend,
-  clampBox,
-  SCRATCH,
   compose,
   renderField,
   signalBox,
-  unionBox,
   warp,
 } from "./field";
 import {
@@ -318,9 +320,10 @@ async function estimateOffThread(
   b: Coarse,
   minutes: number,
   reference: Motion | null,
+  floor: number,
 ): Promise<{ motion: Motion; source: MotionSource }> {
   const w = motionWorker();
-  if (!w) return estimateFromCoarse(a, b, minutes, reference);
+  if (!w) return estimateFromCoarse(a, b, minutes, reference, floor);
 
   const id = nextRequestId++;
   const reply = await new Promise<MotionReply | null>((resolve) => {
@@ -334,26 +337,28 @@ async function estimateOffThread(
       resolve(r);
     });
 
-    /* The coarse grids are freshly built by `downsample` on every estimate and
-       read by nobody else, so they are handed over rather than copied. The
-       reference is not: it belongs to the steering field, which is held in
-       React state and reused. */
-    w.postMessage(
-      {
-        id,
-        minutes,
-        aValue: a.value,
-        aMask: a.mask,
-        bValue: b.value,
-        bMask: b.mask,
-        refU: reference?.u ?? null,
-        refV: reference?.v ?? null,
-      },
-      [a.value.buffer, a.mask.buffer, b.value.buffer, b.mask.buffer],
-    );
+    /* Copied, not transferred.
+    
+       Handing the four coarse grids over detaches them here, and the line
+       below this promise reads them again: on a timeout or a worker error it
+       falls back to `estimateFromCoarse(a, b, …)`, which would then run on
+       zero-length arrays and produce a NaN flow — silently, in exactly the two
+       cases the fallback exists to cover. The grids are 35 kB apiece, so the
+       copy is not worth a broken fallback. */
+    w.postMessage({
+      id,
+      minutes,
+      aValue: a.value,
+      aMask: a.mask,
+      bValue: b.value,
+      bMask: b.mask,
+      refU: reference?.u ?? null,
+      refV: reference?.v ?? null,
+      floor,
+    });
   });
 
-  if (!reply) return estimateFromCoarse(a, b, minutes, reference);
+  if (!reply) return estimateFromCoarse(a, b, minutes, reference, floor);
   return {
     motion: { u: reply.u, v: reply.v, maxSpeed: reply.maxSpeed },
     source: reply.source,
@@ -420,7 +425,7 @@ type RenderReply = { id: number; image: ImageBitmap | null; coordinates?: Corner
 
 /**
  * `null` — the observations could not be assembled; retry.
- * `{ painted: null }` — they were, and hold nothing above SIGNAL_FLOOR.
+ * `{ painted: null }` — they were, and hold nothing the palette would draw.
  *
  * fieldAt and renderField used to carry this distinction between them. Behind
  * one call it has to be explicit, or the cold-start retry fires on clear sky.
@@ -601,6 +606,7 @@ export async function buildSequence(
     downsample(now),
     BASELINE_MIN,
     reference,
+    echoFloorByte(product),
   );
   return { product, latest, motion, source };
 }

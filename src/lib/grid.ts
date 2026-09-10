@@ -96,6 +96,3 @@ export const DOWN = 8;
 /** 160 × 224. Small enough that a dense flow over it is affordable. */
 export const DW = W / DOWN;
 export const DH = H / DOWN;
-
-/** Below this the tile reports clear air rather than weak rain, ~5 dBZ. */
-export const SIGNAL_FLOOR = 21;

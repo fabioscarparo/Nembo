@@ -19,11 +19,10 @@
 import { estimateFromCoarse } from "./flow";
 
 /**
- * What the main thread sends. The two coarse grids are handed over as
- * transferables — seventy kilobytes rather than the four and a half megabytes
- * the full-resolution fields would cost — and the reference field, if there is
- * one, is copied instead, because it belongs to the steering flow and is
- * reused across estimates.
+ * What the main thread sends. The coarse grids are copied rather than
+ * transferred: 35 kB apiece against the four and a half megabytes the
+ * full-resolution fields would cost, and the sender still needs them for the
+ * inline fallback it runs when this worker does not answer.
  */
 type Request = {
   id: number;
@@ -34,6 +33,10 @@ type Request = {
   bMask: Uint8Array;
   refU: Float32Array | null;
   refV: Float32Array | null;
+  /* Per product — see echoFloorByte in dpc.ts. Sent rather than imported:
+     dpc.ts is not a leaf, and this worker imports flow.ts alone for the
+     cycle reason above. */
+  floor: number;
 };
 
 self.onmessage = (e: MessageEvent<Request>) => {
@@ -47,6 +50,7 @@ self.onmessage = (e: MessageEvent<Request>) => {
     { value: d.bValue, mask: d.bMask },
     d.minutes,
     reference,
+    d.floor,
   );
 
   /* The two vector fields are handed over rather than copied: they were

@@ -108,6 +108,9 @@ export type Product = {
   srcMax: number;
   /** Frame cadence in minutes. Tile paths are floored to this. */
   stepMinutes: number;
+  /** Below this the field is clear air rather than echo worth tracking, in
+   *  the product's own unit. Motion estimation gates on it. */
+  echoFloor: number;
   legend: Legend;
 };
 
@@ -121,6 +124,9 @@ export const PRODUCTS: Record<ProductKey, Product> = {
     srcMin: 0,
     srcMax: 60,
     stepMinutes: 5,
+    /* Byte 21 on VMI's 0-60 scale, which is what the estimator used
+       when the floor was one shared constant. */
+    echoFloor: 5,
     legend: {
       title: "Riflettività radar",
       blurb:
@@ -142,6 +148,10 @@ export const PRODUCTS: Record<ProductKey, Product> = {
     srcMin: 0,
     srcMax: 100,
     stepMinutes: 5,
+    /* 5 dBZ is 0.07 mm/h by Marshall-Palmer, below the 0.39 mm/h one
+       byte of this scale can express — so this lands on the first
+       representable value, which is the honest answer. */
+    echoFloor: 0.1,
     legend: {
       title: "Intensità di pioggia",
       blurb:
@@ -163,6 +173,8 @@ export const PRODUCTS: Record<ProductKey, Product> = {
     srcMin: 0,
     srcMax: 200,
     stepMinutes: 5,
+    /* The same, against a scale whose byte is 0.78 mm. */
+    echoFloor: 0.5,
     legend: {
       title: "Pioggia accumulata in un’ora",
       blurb:
@@ -352,6 +364,25 @@ export function tileUrl(
  * about 0.24 dBZ for VMI, and compression adds a little on top. Fine to
  * render, not a number to quote to two decimals.
  */
+/**
+ * `echoFloor` as a byte on this product's own scale.
+ *
+ * A byte spans each product's range, so one shared constant is not one
+ * threshold: the 21 the estimator used throughout meant 4.9 dBZ against VMI's
+ * 0-60 but 8.2 mm/h against SRI's 0-100 and 16.5 mm against SRT1's 0-200 — so
+ * block matching and the dense-flow mask were reading rain rate and
+ * accumulation off their heaviest cores alone. The same mistake `paintFloor`
+ * fixed for cropping.
+ *
+ * Never zero: that would admit a genuinely empty pixel as echo.
+ */
+export function echoFloorByte(product: Product): number {
+  const span = product.srcMax - product.srcMin;
+  if (span <= 0) return 1;
+  const byte = Math.round(((product.echoFloor - product.srcMin) / span) * 255);
+  return Math.max(1, Math.min(255, byte));
+}
+
 export function decodeValue(product: Product, red: number): number {
   return product.srcMin + (red / 255) * (product.srcMax - product.srcMin);
 }

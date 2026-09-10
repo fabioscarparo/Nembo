@@ -38,6 +38,39 @@ let previous: string[] = [];
 /** Counts paints so the recorder can retire itself. See MAX_PAINTS. */
 let paints = 0;
 
+/* ── Persistence ────────────────────────────────────────────
+ *
+ * Recording is a push onto an array; persisting is a JSON.stringify of the
+ * whole log and a synchronous localStorage write. Doing the second on every
+ * call put both on the main thread inside a scrub, where trace() is called
+ * dozens of times a second, for every visitor — the flag only ever gated the
+ * panel, never the recorder, and it cannot gate the recorder without
+ * destroying the point of the file: the failure is recorded before anyone
+ * knows to ask for it.
+ *
+ * So the write is coalesced. A scrub's worth of lines costs one write, and a
+ * tab that goes away takes the tail with it only if it does so within the
+ * window below.
+ */
+
+/** How long a line may sit in memory before it reaches storage. */
+const FLUSH_MS = 500;
+
+let flushTimer: number | null = null;
+
+function flush(): void {
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  try {
+    localStorage.setItem(KEY, JSON.stringify(lines));
+  } catch {
+    // Storage full or refused. The trace is a diagnostic; losing it is not an
+    // error worth propagating into the render path it is watching.
+  }
+}
+
 let started = false;
 
 /** Milliseconds since the trace began, so the gaps between lines are visible —
@@ -62,6 +95,17 @@ function begin(): void {
   } catch {
     // Unparseable or unavailable. An empty history is the right fallback.
   }
+
+  /* The tail is the part a diagnostic is read for, and a coalesced write can
+     still be pending when the tab goes. `visibilitychange` as well as
+     `pagehide` because a phone locking fires the first and not reliably the
+     second, and that is the device this trace exists for. */
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flush();
+    });
+  }
 }
 
 /**
@@ -83,11 +127,8 @@ export function trace(event: string, detail?: Record<string, unknown>): void {
     : "";
   lines.push(`${stamp()} ${event}${rest}`);
 
-  try {
-    localStorage.setItem(KEY, JSON.stringify(lines));
-  } catch {
-    // Storage full or refused. The trace is a diagnostic; losing it is not an
-    // error worth propagating into the render path it is watching.
+  if (flushTimer === null && typeof window !== "undefined") {
+    flushTimer = window.setTimeout(flush, FLUSH_MS);
   }
 }
 
