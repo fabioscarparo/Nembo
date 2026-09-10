@@ -45,8 +45,6 @@ import {
 } from "@/lib/dpc";
 import { RAMPS, buildLut, watchTheme } from "@/lib/colormap";
 import { currentLut, lutEpoch, setLut } from "@/lib/tiles";
-import { debugRequested, trace, tracingPaint } from "@/lib/trace";
-import TracePanel from "./TracePanel";
 import {
   buildSequence,
   COMPOSITE_BOUNDS,
@@ -182,10 +180,6 @@ export default function RadarMap() {
   const [position, setPosition] = useState<[number, number] | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
-  /* After mount: a static export renders this on the server, where there is no
-     location to read the flag out of. */
-  const [debug, setDebug] = useState(false);
-  useEffect(() => setDebug(debugRequested()), []);
   /* One at a time. Both hang off the dock at the same corner, so opening one
      while the other is up would stack two panels on the same pixels. */
   const [legendOpen, setLegendOpen] = useState(false);
@@ -494,11 +488,9 @@ export default function RadarMap() {
       }
 
       m.on("style.load", () => {
-        trace("style.load");
         applyRadar(m, m.getStyle());
         setStyleEpoch((n) => n + 1);
       });
-      m.on("error", (e) => trace("map.error", { msg: String(e?.error ?? e).slice(0, 60) }));
 
       /* Locate on arrival, so the map opens on the weather over your head
          rather than on the country. A permission already refused is not asked
@@ -521,15 +513,21 @@ export default function RadarMap() {
       map.current = m;
       setMapReady(true);
 
-      /* Closes a race: the style can finish parsing between the constructor
-         and the handler attached to it a few lines up. */
-      trace("map.created", { alreadyLoaded: m.isStyleLoaded() });
       /* Not from `style.load`: that event waits on sprite and glyphs, and
          never fires while the page is not rendering. The layer is already in
          the style this map was constructed from. The handler above still runs
          for the theme swap. */
       setStyleEpoch((n) => n + 1);
-    })();
+    })().catch((e) => {
+      /* The dynamic import can reject where the static one could not: a chunk
+         that fails to load, or — the likely one — a tab left open across a
+         deploy, asking for a hashed filename the new build no longer has.
+      
+         Caught so it does not surface as an unhandled rejection, and logged
+         because the symptom is a shell with no map under it and otherwise
+         nothing to say why. */
+      console.error("Nembo: the map renderer failed to load.", e);
+    });
 
     return () => {
       cancelled = true;
@@ -607,7 +605,6 @@ export default function RadarMap() {
     /* No AbortController: the tile fetches are shared with every caller for
        the same instant, so cancelling on cleanup cancelled work the next run
        was about to await. `cancelled` only discards a late result. */
-    trace("seq.start", { product, latest, steering: steering ? "yes" : "no" });
     let again = 0;
 
     /* setSequence(null) on an already-null state is not a change React can
@@ -615,7 +612,6 @@ export default function RadarMap() {
     const retry = () => {
       if (cancelled || seqAttempts.current >= SEQ_RETRIES) return;
       seqAttempts.current += 1;
-      trace("seq.retry", { n: seqAttempts.current });
       again = window.setTimeout(
         () => setSeqAttempt((n) => n + 1),
         SEQ_RETRY_MS,
@@ -624,7 +620,6 @@ export default function RadarMap() {
 
     buildSequence(product, latest, steering)
       .then((s) => {
-        trace("seq.ok", { cancelled, got: s ? "seq" : "NULL", source: s?.source ?? "-" });
         if (cancelled) return;
         // 286KB. Once per sequence.
         if (s) shareMotion(s.motion);
@@ -635,8 +630,7 @@ export default function RadarMap() {
       /* A missing baseline is the usual cause and it fixes itself on the next
          publication. The radar keeps working without motion; it just stops
          moving between observations. */
-      .catch((e) => {
-        trace("seq.FAIL", { cancelled, msg: String(e?.message ?? e).slice(0, 60) });
+      .catch(() => {
         if (cancelled) return;
         setSequence(null);
         retry();
@@ -731,22 +725,6 @@ export default function RadarMap() {
           const frame = await paintAt(next.seq, next.time, currentLut());
           if (map.current !== m) continue;
 
-          /* Every branch below ends as an empty map. See lib/trace.ts. */
-          const watching = tracingPaint();
-          if (watching) {
-            const lut = currentLut();
-            let opaque = 0;
-            for (let i = 3; i < lut.length; i += 4) if (lut[i] > 0) opaque += 1;
-            trace("field", {
-              ok: frame ? "yes" : "NULL",
-              painted: frame?.painted
-                ? `${frame.painted.image.width}x${frame.painted.image.height}`
-                : "none",
-              lutOpaque: opaque,
-              retries: coldRetries.current,
-            });
-          }
-
           /* null means the stitch lost every tile, not that the sky is clear
              — an empty sky is a field of zeroes. The queue is already drained
              at this point, so without a re-queue nothing wakes the loop and
@@ -771,16 +749,6 @@ export default function RadarMap() {
           const painted = frame.painted;
 
           const src = m.getSource(RADAR_SOURCE) as ImageSource | undefined;
-          if (watching) {
-            trace("draw", {
-              painted: painted ? `${painted.image.width}x${painted.image.height}` : "NULL",
-              layer: m.getLayer(RADAR_LAYER) ? "yes" : "MISSING",
-              source: src ? "yes" : "MISSING",
-              opacity: m.getLayer(RADAR_LAYER)
-                ? m.getPaintProperty(RADAR_LAYER, "raster-opacity")
-                : "-",
-            });
-          }
           /* The source arrives with the style, which MapLibre parses on its
              own schedule. Same drained-queue dead end as the branch above. */
           if (!src) {
@@ -812,8 +780,7 @@ export default function RadarMap() {
             }
             everPainted.current = true;
             coldRetries.current = 0;
-          } catch (e) {
-            trace("draw.THREW", { msg: String((e as Error)?.message ?? e).slice(0, 60) });
+          } catch {
             if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
               coldRetries.current += 1;
               wanted.current = next;
@@ -834,17 +801,8 @@ export default function RadarMap() {
   useEffect(() => {
     const m = map.current;
     if (!m || !sequence || displayed === null || !mapReady || styleEpoch === 0) {
-      /* "Never ran" and "ran and drew nothing" look identical on screen. */
-      trace("gate", {
-        map: m ? "yes" : "no",
-        seq: sequence ? "yes" : "no",
-        displayed: displayed === null ? "null" : "yes",
-        mapReady,
-        styleEpoch,
-      });
       return;
     }
-    trace("queue", { styleEpoch, paletteEpoch, latest: sequence.latest });
     wanted.current = { time: displayed, seq: sequence };
     void paint(m);
     /* `paletteEpoch` is in here because the table the frame is painted through
@@ -1122,7 +1080,6 @@ export default function RadarMap() {
   return (
     <>
       <div ref={container} className="absolute inset-0" />
-      {debug && <TracePanel />}
       {/* One row, so the two pills divide the width instead of competing for
           it. Transparent to pointers between them, or the strip would eat
           drags on the map along the whole top edge. */}
@@ -1271,9 +1228,10 @@ export default function RadarMap() {
           }
           />
         ) : (
-          /* Matches the strip's own height — its pills are h-11 — so the row
-             is the same size before and after the sequence arrives. */
-          <div className="h-11" aria-hidden />
+          /* The same height as the strip it stands in for, so the row does
+             not change size when the sequence arrives. Both read it from
+             `--control-h`. */
+          <div className="control-h" aria-hidden />
         )}
       </div>
     </>

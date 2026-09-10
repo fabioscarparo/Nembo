@@ -10,7 +10,7 @@
  * picked it as the largest contentful element and measured 3.3 s of render
  * delay behind it. Here it is in the static HTML, painted with the shell.
  */
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { usePageVisible, useVisibleInterval } from "@/lib/visibility";
 
@@ -48,7 +48,10 @@ function ageValue(minutes: number) {
   return `${minutes} minuti fa`;
 }
 
-export default function Credits({ at }: { at: number | undefined }) {
+/* Memoised for the same reason Dock and PlacePill are: this sits in the page,
+   so every step of a scrub re-renders RadarMap and would rebuild it. `at`
+   moves once an observation, not once a frame. */
+function Credits({ at }: { at: number | undefined }) {
   const age = useAge(at);
 
   /* Freshness first: it is the half that changes. `on-map` carries the
@@ -73,3 +76,5 @@ export default function Credits({ at }: { at: number | undefined }) {
     </div>
   );
 }
+
+export default memo(Credits);

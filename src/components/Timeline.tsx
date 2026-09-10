@@ -30,9 +30,7 @@ import { TextMorph } from "torph/react";
 
 import type { MotionSource } from "@/lib/nowcast";
 import { useHaptics } from "@/lib/haptics";
-import { usePageVisible, useVisibleInterval } from "@/lib/visibility";
 import { useSound } from "@/lib/sound";
-import { debugRequested, trace } from "@/lib/trace";
 
 type Props = {
   /** Every instant on the axis, oldest first, one a minute. Absolute times
@@ -143,9 +141,6 @@ export default function Timeline({
   }, [haptics, sound]);
 
   const index = Math.max(0, frames.indexOf(value));
-  /* traceEnd reports the index at release, not at handler creation. */
-  const indexRef = useRef(index);
-  indexRef.current = index;
   const nowIndex = observedCount - 1;
 
   /* One counter per tick. The thumb does not light ticks it is near — it
@@ -186,68 +181,6 @@ export default function Timeline({
   /* The resting width is whatever the buttons leave over, so unlike the
      expanded one it cannot be derived. Remembered at press instead. */
   const restingTrack = useRef(0);
-
-  /* Pointer tracing for the scrub gesture, behind `?debug=1`.
-   *
-   * A drag that does nothing looks the same on screen whatever caused it, and
-   * a phone has no console — see lib/trace.ts. The counters separate the
-   * cases:
-   *
-   *   moves=0                  the pointer stream stopped
-   *   scrub.CANCEL             the browser took the gesture over
-   *   dom=0 with moves high    the native range is not tracking the drag
-   *   dom high with changes=0  it is tracking, React is not being told
-   *   dx small                 the finger did not cross a step
-   *
-   * `gap` is how far the press landed from the thumb, in CSS pixels. iOS only
-   * begins a range drag on the thumb itself, and this one is 3px wide, so a
-   * large gap on the failing gestures and a small one on the rest would say
-   * the control was never grabbed. One getBoundingClientRect per gesture, at
-   * press, not per move.
-   *
-   * `dom` counts transitions of the input's own value property, read on each
-   * move: a property read, no layout. `dx` is the travel in client pixels,
-   * from the event coordinates, for the same reason — getBoundingClientRect
-   * inside a drag is a forced layout per frame.
-   *
-   * Moves are counted, not logged: they arrive at refresh rate, would pass
-   * MAX_LINES within one gesture, and trace() writes to localStorage on every
-   * call. */
-  const tracing = useRef(false);
-  useEffect(() => {
-    tracing.current = debugRequested();
-  }, []);
-
-  const gesture = useRef({
-    moves: 0,
-    changes: 0,
-    from: 0,
-    /* Transitions of the DOM value, and the value last seen, so a transition
-       is counted once rather than on every move that follows it. */
-    dom: 0,
-    lastDom: "",
-    xMin: 0,
-    xMax: 0,
-    gap: 0,
-  });
-
-  const traceEnd = useCallback(
-    (event: string, e: React.PointerEvent<HTMLInputElement>) => {
-      const g = gesture.current;
-      trace(event, {
-        type: e.pointerType,
-        moves: g.moves,
-        dom: g.dom,
-        changes: g.changes,
-        dx: Math.round(g.xMax - g.xMin),
-        gap: g.gap,
-        /* Whether the element still owns the pointer. A drag that stops
-           tracking because capture went elsewhere reports cap=no here. */
-        cap: e.currentTarget.hasPointerCapture(e.pointerId) ? "yes" : "no",
-        from: g.from,
-        to: indexRef.current,
-      });
-  }, []);
 
   const fitTicks = useCallback(
     (width: number) => {
@@ -474,7 +407,7 @@ export default function Timeline({
 
         <div
           ref={ruler}
-          className="t-strip-ruler dock-surface grid h-11 min-w-0 max-w-[52rem] flex-1 grid-cols-[1fr_auto] items-center gap-2 rounded-full px-3 sm:gap-3 sm:px-4">
+          className="t-strip-ruler dock-surface control-h grid min-w-0 max-w-[52rem] flex-1 grid-cols-[1fr_auto] items-center gap-2 rounded-full px-3 sm:gap-3 sm:px-4">
           <div className="tick-slider" ref={track}>
           <div className="tick-marks" aria-hidden="true">
             {pulses.map((count, i) => {
@@ -520,31 +453,6 @@ export default function Timeline({
                swallows that first tick — the one that tells you the control
                is live — and the scrub feels mute until the second frame. */
             onPointerDown={(e) => {
-              if (tracing.current) {
-                const el = e.currentTarget;
-                const box = el.getBoundingClientRect();
-                const span = Number(el.max) || 1;
-                /* Within half the thumb's width, since the thumb is 3px. */
-                const thumbX = box.left + (Number(el.value) / span) * box.width;
-                gesture.current = {
-                  moves: 0,
-                  changes: 0,
-                  from: index,
-                  dom: 0,
-                  lastDom: el.value,
-                  xMin: e.clientX,
-                  xMax: e.clientX,
-                  gap: Math.round(Math.abs(e.clientX - thumbX)),
-                };
-                /* Computed, not the stylesheet's: a device on stale cached
-                   CSS reports ta=auto here. */
-                trace("scrub.down", {
-                  type: e.pointerType,
-                  ta: getComputedStyle(el).touchAction,
-                  index,
-                  gap: gesture.current.gap,
-                });
-              }
               sound.prime();
               beginScrub();
               dragging.current = true;
@@ -554,38 +462,24 @@ export default function Timeline({
               e.currentTarget.setPointerCapture(e.pointerId);
               seek(e.currentTarget, e.clientX);
             }}
-            /* Counted, not logged. See the tracing block above. */
             onPointerMove={(e) => {
               if (dragging.current) seek(e.currentTarget, e.clientX);
-              if (!tracing.current) return;
-              const g = gesture.current;
-              g.moves += 1;
-              if (e.clientX < g.xMin) g.xMin = e.clientX;
-              if (e.clientX > g.xMax) g.xMax = e.clientX;
-              const v = e.currentTarget.value;
-              if (v !== g.lastDom) {
-                g.dom += 1;
-                g.lastDom = v;
-              }
             }}
             /* Letting go, once. `onPointerUp` misses the drag that ends off
                the element and the gesture the browser cancels, and the range
                has pointer capture, so both are routed back here. */
             onPointerUp={(e) => {
-              if (tracing.current) traceEnd("scrub.up", e);
               dragging.current = false;
               sound.release();
               endScrub();
             }}
             onPointerCancel={(e) => {
-              if (tracing.current) traceEnd("scrub.CANCEL", e);
               dragging.current = false;
               sound.release();
               endScrub();
             }}
             /* A capture lost to a system gesture fires neither handler above. */
             onLostPointerCapture={(e) => {
-              if (tracing.current) traceEnd("scrub.lostcapture", e);
               dragging.current = false;
               endScrub();
             }}
@@ -593,7 +487,6 @@ export default function Timeline({
                reaches the same applyIndex, so a native change that repeats it
                is dropped by its own no-op test. */
             onChange={(e) => {
-              if (tracing.current) gesture.current.changes += 1;
               /* The pointer path owns the value while a drag is live. Where
                  the native drag works it computes the same index to within a
                  rounding boundary, and letting both write meant the two could

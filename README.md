@@ -158,20 +158,19 @@ src/lib/
   place.ts           reverse geocoding and current conditions for a fix
   visibility.ts      intervals and polls gated on document visibility
   basemap.ts         CARTO vector style, with a bundled coastline fallback
-  trace.ts           bounded diagnostic log, persisted to localStorage
   theme.ts           light/dark/system preference and its persistence
   sound.ts           declarative synthesis of the interface's sound set
   haptics.ts         vibration triggers and the shared feedback preference
 
 src/components/
   RadarMap.tsx       map lifecycle, radar layer, and the application state
+  Credits.tsx        data freshness and the attribution the DPC requires
   Timeline.tsx       frame axis, tick ruler, playback, pointer-driven scrub
   Dock.tsx           product tabs and the legend toggle
-  Settings.tsx       sound, haptics and theme controls, plus attribution
+  Settings.tsx       sound, haptics and theme controls, author and source
   Legend.tsx         per-product colour scale and its band thresholds
   PlacePill.tsx      place name and conditions for the current fix
   SlidingTabs.tsx    tab control with an animated selection pill
-  TracePanel.tsx     overlay rendering of the persisted trace
 ```
 
 ---

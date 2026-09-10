@@ -76,7 +76,7 @@ function Pill({ place }: { place: Place | null }) {
           to a third while the temperature beside it stayed intact. Stacked,
           the name has the pill's width to itself — which also affords the
           description on a phone, where it used to be dropped. */}
-      <div className="dock-surface flex h-11 min-w-0 flex-col justify-center gap-[3px] rounded-full px-4">
+      <div className="dock-surface control-h flex min-w-0 flex-col justify-center gap-[3px] rounded-full px-4">
         {/* The first thing to give up space, because a shortened town name is
             still the town you are in. min-w-0 is what lets a flex item shrink
             below its content at all. */}

@@ -39,6 +39,13 @@
   --icon-swap-start-scale: 0.25;
   --icon-swap-ease: ease-in-out;
 
+  /* Every floating control is this tall — the dock's pills, the round
+     buttons, the ruler, the place pill, and the placeholder that holds the
+     row's height before the timeline arrives. It was written out at five
+     sites; a change to any one of them was a change to all five, and nothing
+     said so. */
+  --control-h: 44px;
+
   --distance-base: 8px;
   --blur-medium: 3px;
   /* Deeper than the portfolio's text blur on purpose: three pixels reads as
@@ -173,13 +180,13 @@ body {
     0 0 0 0.5px rgba(255, 255, 255, 0.1);
 }
 
-/* 44px, matching the slider and every round button. The tabs inside grow
-   with it — see `.dock-tabs .t-tab`. */
+/* The shared control height; the tabs inside grow with it — see
+   `.dock-tabs .t-tab`. */
 .dock-pill {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 44px;
+  height: var(--control-h);
   padding: 4px;
   border-radius: 9999px;
 }
@@ -215,8 +222,15 @@ body {
    Tailwind utility — those classes were on the button and being ignored. The
    same cascade-layer trap as maplibre-gl.css earlier in this project. */
 .dock-btn-lg {
-  width: 44px;
-  height: 44px;
+  width: var(--control-h);
+  height: var(--control-h);
+}
+
+/* For the markup that cannot reach a CSS rule of its own: the ruler, the
+   place pill and the row's placeholder all stand exactly as tall as the
+   controls beside them. */
+.control-h {
+  height: var(--control-h);
 }
 
 /* Timestamps and dBZ readouts sit in the same tabular figures as the
