@@ -27,12 +27,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Gear, Location } from "reicon-react";
-import {
+/* Types only — the module itself is imported at the bottom of the effect that
+   builds the map. See there for why. */
+import type {
   MapLibreMap,
   Marker,
-  setWorkerUrl,
-  type ImageSource,
-  type StyleSpecification,
+  ImageSource,
+  StyleSpecification,
 } from "maplibre-gl";
 
 import {
@@ -67,6 +68,7 @@ import { type ThemeChoice, applyTheme, readTheme } from "@/lib/theme";
 import { type Place, lookupPlace } from "@/lib/place";
 import Dock from "./Dock";
 import Legend from "./Legend";
+import Credits from "./Credits";
 import Settings from "./Settings";
 import PlacePill from "./PlacePill";
 import Timeline from "./Timeline";
@@ -439,17 +441,37 @@ export default function RadarMap() {
     let cancelled = false;
     let created: MapLibreMap | null = null;
 
-    /* Must precede the first Map. MapLibre would otherwise resolve its worker
-       against its own bundled chunk URL, which Turbopack has renamed — the
-       fetch 404s, the worker never starts, and every source stays unloaded
-       while the map reports no error at all. */
-    setWorkerUrl("/maplibre-gl-worker.mjs");
-
     (async () => {
-      const style = dressStyle(await resolveStyle(isDark()));
+      /* MapLibre is loaded here rather than imported at the top of the file.
+      
+         It is 1.1 MB of renderer, and as a static import it sits in the
+         initial graph: the browser parses and evaluates all of it before
+         React can put anything on screen. Measured on the deployed site, that
+         is twelve seconds of blocked main thread on a mid-range phone — long
+         enough that the paint queued at 4.8 s did not run until 17.4 s,
+         because the pump waits on a requestAnimationFrame that cannot fire.
+      
+         Behind a dynamic import the shell renders first and the renderer
+         arrives after. The work is the same; what changes is that it no
+         longer stands in front of the first paint.
+      
+         Fetched alongside the style rather than before it: neither needs the
+         other, and serialising them would hand back what this saves. */
+      const [maplibre, raw] = await Promise.all([
+        import("maplibre-gl"),
+        resolveStyle(isDark()),
+      ]);
       if (cancelled || !container.current) return;
 
-      const m = new MapLibreMap({
+      /* Must precede the first Map. MapLibre would otherwise resolve its
+         worker against its own bundled chunk URL, which Turbopack has renamed
+         — the fetch 404s, the worker never starts, and every source stays
+         unloaded while the map reports no error at all. */
+      maplibre.setWorkerUrl("/maplibre-gl-worker.mjs");
+
+      const style = dressStyle(raw);
+
+      const m = new maplibre.MapLibreMap({
         container: container.current,
         style,
         ...HOME,
@@ -468,7 +490,7 @@ export default function RadarMap() {
       if (pinEl) {
         // Centred: a dot marks the spot it sits on, where a teardrop
         // marked the point beneath its tip.
-        pin.current = new Marker({ element: pinEl, anchor: "center" });
+        pin.current = new maplibre.Marker({ element: pinEl, anchor: "center" });
       }
 
       m.on("style.load", () => {
@@ -1137,8 +1159,19 @@ export default function RadarMap() {
           pinEl,
         )}
 
-      {displayed !== null && frames.length > 1 && (
-        <Timeline
+      {/* The row, always. Its two occupants are not always the same: the
+          credits and the strip's height exist from the first paint, the
+          timeline itself only once there is a sequence to scrub.
+      
+          Reserving the height is the whole point of the placeholder. Swapping
+          a 44 px strip in where there was nothing would push the credits up
+          and cost a layout shift, and CLS is the one metric this page already
+          scores full marks on. */}
+      <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 px-4 pb-5">
+        <Credits at={frames[observedCount - 1]} />
+
+        {displayed !== null && frames.length > 1 ? (
+          <Timeline
           frames={frames}
           observedCount={observedCount}
           value={displayed}
@@ -1236,8 +1269,13 @@ export default function RadarMap() {
               />
             </div>
           }
-        />
-      )}
+          />
+        ) : (
+          /* Matches the strip's own height — its pills are h-11 — so the row
+             is the same size before and after the sequence arrives. */
+          <div className="h-11" aria-hidden />
+        )}
+      </div>
     </>
   );
 }

@@ -100,40 +100,6 @@ function tickCountFor(width: number, frames: number): number {
 }
 
 /**
- * How long ago the newest measurement was taken, in whole minutes.
- *
- * On its own timer rather than derived at render: paused, nothing else in
- * this component re-renders, and a staleness readout that silently stops
- * ageing is worse than none — it would keep claiming the data was two
- * minutes old an hour later. Half a minute is well inside the five the DPC
- * takes between scans, so the number is never visibly behind.
- */
-function useAge(at: number | undefined) {
-  const [now, setNow] = useState(() => Date.now());
-  const visible = usePageVisible();
-
-  /* Stopped while hidden, and resynced the moment the page comes back: a
-     clock that keeps ticking in a background tab is work for nobody, and one
-     that resumes without catching up would claim the data is two minutes old
-     an hour later — the exact failure this hook exists to avoid. */
-  useVisibleInterval(() => setNow(Date.now()), 30_000, visible);
-
-  if (at === undefined) return null;
-  // Clocks disagree; a scan cannot be from the future, so clamp rather than
-  // render "aggiornato -1 minuti fa".
-  return Math.max(0, Math.round((now - at) / 60_000));
-}
-
-/** The age, said the way it would be spoken. The value alone: the word
- *  "aggiornato" is supplied by the caller, which is also where the two are
- *  set — in one weight now, having been two. */
-function ageValue(minutes: number) {
-  if (minutes < 1) return "adesso";
-  if (minutes === 1) return "1 minuto fa";
-  return `${minutes} minuti fa`;
-}
-
-/**
  * A fixed ruler with a moving thumb, built on a real `<input type="range">`
  * with the ticks laid over it as decoration.
  *
@@ -160,7 +126,6 @@ export default function Timeline({
   trailing,
 }: Props) {
   const haptics = useHaptics();
-  const age = useAge(frames[observedCount - 1]);
   const sound = useSound();
 
   /* Gated on marks crossed, not frames changed: 61 frames over ~40 marks
@@ -464,24 +429,11 @@ export default function Timeline({
      is positioned rather than being one of the ticks. */
   const nowAt = frames.length > 1 ? nowIndex / (frames.length - 1) : 1;
 
+  /* The strip alone. The row it sits in, and the credits above it, belong to
+     the page: both exist before there is a sequence to show, and this
+     component does not. */
   return (
-    <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 px-4 pb-5">
-      {/* Required by the DPC's terms, and it belongs on the surface rather
-          than in a readme: the data is theirs, the colours are not. It lives
-          here rather than in the page because the timeline is the only thing
-          that knows how tall it is, and the line has to sit just above it
-          however that changes. */}
-      {/* Freshness first: it is the half that changes. The attribution below
-          is required by the DPC's terms. `on-map` carries the legibility over
-          whatever the map is showing.
-
-          Here rather than in the page because only the timeline knows its own
-          height, and this sits directly above it. */}
-      <div className="on-map text-fg pointer-events-none flex flex-col items-center gap-[3px] text-center text-[11px] leading-tight">
-        {age !== null && <p>aggiornato {ageValue(age)}</p>}
-        <p>Dati radar del Dipartimento della Protezione Civile</p>
-      </div>
-
+    <>
       {/* 46rem when the strip held three controls; it now holds six, and the
           ruler was giving up its pitch to them. Still capped. */}
       <div
@@ -723,6 +675,6 @@ export default function Timeline({
 
         {trailing}
       </div>
-    </div>
+    </>
   );
 }
