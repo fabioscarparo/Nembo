@@ -1,17 +1,11 @@
 "use client";
 
 /**
- * The tactile half of the same idea as sound.ts, and deliberately its mirror.
+ * Vibration feedback over web-haptics, and the preference that mutes it.
  *
- * A thin wrapper over web-haptics, kept parallel to the portfolio's so the two
- * projects speak one vocabulary, plus a preference with the same shape as the
- * mute flag: module state so the triggers stay plain calls, persisted under
- * its own key, defaulting to on because a device that can buzz generally
- * should. Everything no-ops where there is no motor.
- *
- * Both triggers are gated here rather than at the call sites. A caller asking
- * for feedback should not also have to ask whether feedback is wanted — that
- * is how one of them ends up forgetting.
+ * Shaped like sound.ts: module-scope state so the triggers stay plain calls,
+ * one storage key, on by default. Both triggers gate on the preference here
+ * rather than at the call sites.
  *
  * @see https://haptics.lochie.me
  */
@@ -19,28 +13,17 @@ import { useMemo } from "react";
 
 import { useWebHaptics } from "web-haptics/react";
 
-/**
- * Thin wrapper over web-haptics, kept deliberately parallel to the one in the
- * portfolio so the two projects speak the same tactile vocabulary. No-ops on
- * devices without a vibration motor.
- *
- * @see https://haptics.lochie.me
- */
+/** Storage key for the preference. */
 export const HAPTICS_KEY = "haptics";
 
-/**
- * Held at module scope for the same reason the mute flag is: the triggers
- * below are plain calls from anywhere, and threading a preference through
- * every one of them would put the state in the wrong place. Read once; on the
- * server the read throws and falls back to on, which is the right default —
- * a device that can buzz generally should.
- */
+/* Module scope, not React state: the triggers are called from anywhere, and
+   threading a preference through each of them would put it in the wrong
+   place. */
 let enabled = readHaptics();
 
-/** The stored preference, straight from storage. Separate from isHapticsOn()
- *  read after mount rather than during render, because a static export
- *  renders on the server where storage throws. The triggers below close over
- *  the module flag, so no accessor is needed. */
+/** The stored preference. Unset or unreadable means on: a device that can
+ *  buzz generally should, and a static export reads this on the server, where
+ *  storage throws. */
 export function readHaptics(): boolean {
   try {
     return localStorage.getItem(HAPTICS_KEY) !== "off";
@@ -49,7 +32,7 @@ export function readHaptics(): boolean {
   }
 }
 
-/** Sets it for this session and, if it can, for the next one. */
+/** Sets it for this session and, if storage allows, the next. */
 export function setHaptics(next: boolean): void {
   enabled = next;
   try {
@@ -60,20 +43,30 @@ export function setHaptics(next: boolean): void {
 }
 
 /**
- * The two feedbacks this app uses, memoised.
+ * Whether a tap can ever happen on this device.
  *
- * Memoised because the object lands in the dependency array of the handlers
- * that fire it: a fresh identity every render rebuilt every handler on every
- * keystroke of a drag, and with it the buttons holding them.
- */
-/**
- * Fires a trigger without letting a failure escape.
+ * Chrome permits navigator.vibrate only after the frame has been tapped, and
+ * a click is not a tap. The method exists on desktop anyway, so web-haptics
+ * reads the platform as supported and calls it once per detent — each one
+ * blocked and logged. No touch points means no tap will ever come.
  *
- * Handlers call for feedback before doing their work, so a throw here takes
- * the action with it. sound.ts has swallowed its own failures from the start.
+ * Read lazily: the module is evaluated on the server.
  */
+let touchable: boolean | null = null;
+
+function canTap(): boolean {
+  if (touchable === null) {
+    touchable =
+      typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+  }
+  return touchable;
+}
+
+/** Fires a trigger without letting a failure reach the caller: handlers ask
+ *  for feedback before doing their work, so a throw here would take the
+ *  action with it. */
 function fire(run: () => unknown): void {
-  if (!enabled) return;
+  if (!enabled || !canTap()) return;
   try {
     /* `trigger` returns a promise. A rejection would otherwise surface as an
        unhandled rejection from a control that worked perfectly. */
@@ -83,11 +76,15 @@ function fire(run: () => unknown): void {
   }
 }
 
+/**
+ * The two feedbacks this app uses.
+ *
+ * Memoised: the object is a dependency of the handlers that fire it, and a
+ * fresh identity every render rebuilds all of them.
+ */
 export function useHaptics() {
   const { trigger } = useWebHaptics();
 
-  /* Memoised for the same reason as useSound: this object is a dependency of
-     the handlers that fire it, and a new identity every render churns them. */
   return useMemo(
     () => ({
       /** Crossing a detent — the timeline's ticks. The same feedback iOS

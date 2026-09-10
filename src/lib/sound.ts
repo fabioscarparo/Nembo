@@ -21,7 +21,7 @@
  */
 import { useMemo } from "react";
 
-import { defineSound } from "@web-kits/audio";
+import { defineSound, ensureReady } from "@web-kits/audio";
 
 /**
  * The timeline's two sounds, built with the same @web-kits/audio synthesis the
@@ -245,14 +245,17 @@ export function useSound() {
       tick: () => playSound("tick", 0.12),
       release: () => playSound("release", 0.13),
       /**
-       * A tick at inaudible volume, fired on pointer down.
+       * Resumes the shared AudioContext from inside a user gesture.
        *
-       * Browsers will only start an AudioContext inside a user gesture, and
-       * the first detent of a drag arrives after the gesture that could have
-       * unlocked it. Spending that gesture on a silent note means the first
-       * real tick is heard rather than swallowed.
+       * The first detent of a drag arrives after the gesture that would have
+       * lifted the browser's suspension, hence pointer down. It has to be
+       * resume(): playing into a suspended context is the call that gets
+       * refused. Not awaited — a pointer handler must not block on audio.
        */
-      prime: () => playSound("tick", 0.0001),
+      prime: () => {
+        if (muted) return;
+        void ensureReady().catch(() => {});
+      },
 
       /** The two switches in the settings panel. Direction carries the state:
        *  you can hear which way it went without looking at it. */
