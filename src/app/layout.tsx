@@ -150,15 +150,35 @@ export default function RootLayout({
     <html lang="it" className={satoshi.variable} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: bootScript }} />
-        {/* The tile bucket is a different origin on every frame request.
-            Paying the TLS handshake once, up front, takes it off the path of
-            the first tile the visitor actually waits for. */}
+        {/* Four origins stand between a cold load and a first frame, and every
+            one of them is a fresh TLS handshake on the critical path. Four is
+            also the ceiling worth declaring — beyond that the handshakes
+            compete with the requests they were meant to help.
+
+            `crossOrigin` on all of them, and that is not decoration: every one
+            is reached by `fetch`, so the connection the browser opens has to
+            be an anonymous CORS one or it will not be the connection the
+            request wants. Declared without it, a preconnect is opened, kept
+            idle and thrown away — which is what Lighthouse reports as
+            "preconnect not used". */}
         <link
           rel="preconnect"
           href="https://s3-prod-dpc-radar-webp-cache.s3.eu-south-1.amazonaws.com"
           crossOrigin=""
         />
-        <link rel="preconnect" href="https://radar-api.protezionecivile.it" />
+        <link
+          rel="preconnect"
+          href="https://radar-api.protezionecivile.it"
+          crossOrigin=""
+        />
+        {/* The basemap style, its glyphs and its tiles. */}
+        <link
+          rel="preconnect"
+          href="https://basemaps.cartocdn.com"
+          crossOrigin=""
+        />
+        {/* The steering wind, fetched as soon as a sequence is wanted. */}
+        <link rel="preconnect" href="https://api.open-meteo.com" crossOrigin="" />
       </head>
       <body>{children}</body>
     </html>
