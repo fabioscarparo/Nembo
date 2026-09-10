@@ -44,7 +44,7 @@ const SITE = "https://nembo.fscarparo.com";
 /* One title and one description, shared by the document head, the Open Graph
    card and the Twitter card. Three copies of the same sentence drift the
    moment one of them is edited. */
-const TITLE = "Nembo — Radar Meteorologico Italiano";
+const TITLE = "Nembo - Radar Meteorologico Italiano";
 const DESCRIPTION =
   "Radar meteorologico italiano essenziale e curato, con nowcasting a 30 " +
   "minuti, elaborato a partire dai dati del Dipartimento della Protezione " +
