@@ -61,7 +61,12 @@ export default function Credits({ at }: { at: number | undefined }) {
      line box; `aria-hidden` keeps assistive technology from announcing it. */
   return (
     <div className="on-map text-fg pointer-events-none flex flex-col items-center gap-[3px] text-center text-[11px] leading-tight">
-      <p aria-hidden={age === null}>
+      {/* Full width, not shrink-wrapped. The non-breaking space holds the
+          line's height, but inside an `items-center` column the box itself
+          still grew from a hair to the width of the text — which is a layout
+          shift, and the one Lighthouse names. Stretched to the column, only
+          the content changes. */}
+      <p className="w-full" aria-hidden={age === null}>
         {age === null ? "\u00A0" : `aggiornato ${ageValue(age)}`}
       </p>
       <p>Dati radar del Dipartimento della Protezione Civile</p>
