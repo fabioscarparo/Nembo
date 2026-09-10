@@ -22,7 +22,7 @@ export const dynamic = "force-static";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Nembo — Radar Meteorologico Italiano",
+    name: "Nembo - Radar Meteorologico Italiano",
     /* What fits under a home screen icon before Android truncates it. */
     short_name: "Nembo",
     description:
