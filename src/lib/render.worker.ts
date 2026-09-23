@@ -72,7 +72,11 @@ async function pump() {
           [painted.image],
         );
       } else {
-        self.postMessage({ id: job.id, image: null });
+        /* `empty` when there was a field and nothing in it to draw — clear
+           sky, a correct answer. Without it the caller could not tell that
+           from a field this worker failed to assemble, and recomputed both on
+           the main thread. */
+        self.postMessage({ id: job.id, image: null, empty: field !== null });
       }
     }
   } finally {

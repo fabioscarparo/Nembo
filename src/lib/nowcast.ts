@@ -408,7 +408,13 @@ function motionFromSteering(steering: Steering): Motion {
  * back to running the same code inline.
  */
 
-type RenderReply = { id: number; image: ImageBitmap | null; coordinates?: Corners };
+type RenderReply = {
+  id: number;
+  image: ImageBitmap | null;
+  coordinates?: Corners;
+  /** Set with a null image when the field existed and held nothing to draw. */
+  empty?: boolean;
+};
 
 /**
  * `null` — the observations could not be assembled; retry.
@@ -531,8 +537,10 @@ export async function paintAt(
     if (reply?.image && reply.coordinates) {
       return { painted: { image: reply.image, coordinates: reply.coordinates } };
     }
-    /* Null reply: empty field, or the worker lacked an observation. Falling
-       through recomputes inline and reaches the same answer either way. */
+    // Clear sky: a correct answer, not a failure to recompute.
+    if (reply?.empty) return { painted: null };
+    /* Anything else — a timeout, a worker error, an observation the worker
+       does not have — is recomputed here. */
   }
 
   const field = compose(a, b, need.aTime, need.step, seq.motion, time, need.ahead);

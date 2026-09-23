@@ -224,10 +224,19 @@ function scratch() {
   return { value: new Uint8Array(W * H), mask: new Uint8Array(W * H) };
 }
 
-
 /** Three, because the deepest case needs exactly that: two warps feeding one
- *  blend. A fourth would need `compose` to grow a case. */
-export const SCRATCH = [scratch(), scratch(), scratch()] as const;
+ *  blend. A fourth would need `compose` to grow a case.
+ *
+ *  Allocated on first use, not at module load. This module is evaluated on
+ *  the main thread as well as in the render worker, and on the main thread
+ *  `compose` runs only as a fallback — so an eager allocation held 14 MB
+ *  there for a path that normally never runs. */
+let buffers: ReturnType<typeof scratch>[] | null = null;
+
+function scratchBuffers() {
+  buffers ??= [scratch(), scratch(), scratch()];
+  return buffers;
+}
 
 /**
  * Samples `field` as it would look `minutes` later — negative to look
@@ -443,9 +452,10 @@ export function compose(
   ahead: boolean,
 ): Field | null {
   // Past the last observation there is only one frame to work from.
+  const scratch = scratchBuffers();
   if (ahead) {
     if (!a) return null;
-    return warp(a, motion, (time - aTime) / 60_000, SCRATCH[0]);
+    return warp(a, motion, (time - aTime) / 60_000, scratch[0]);
   }
 
   if (!a && !b) return null;
@@ -457,7 +467,7 @@ export function compose(
      switched; warping both means the picture is always in motion and the
      observations are just the moments where it agrees with the radar. */
   const t = (time - aTime) / step;
-  const forward = warp(a, motion, (t * step) / 60_000, SCRATCH[0]);
-  const backward = warp(b, motion, -((1 - t) * step) / 60_000, SCRATCH[1]);
-  return blend(forward, backward, t, SCRATCH[2]);
+  const forward = warp(a, motion, (t * step) / 60_000, scratch[0]);
+  const backward = warp(b, motion, -((1 - t) * step) / 60_000, scratch[1]);
+  return blend(forward, backward, t, scratch[2]);
 }
