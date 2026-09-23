@@ -51,11 +51,9 @@ import {
   type Corners,
   type Field,
   type Painted,
-  blend,
   compose,
   renderField,
   signalBox,
-  warp,
 } from "./field";
 import {
   type Coarse,
@@ -599,6 +597,44 @@ export async function buildSequence(
     echoFloorByte(product),
   );
   return { product, latest, motion, source };
+}
+
+/** Resolves when the main thread is next idle, or after `timeout` ms at the
+ *  latest. Safari has no requestIdleCallback. */
+function idle(timeout = 2000): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => resolve(), { timeout });
+    } else {
+      setTimeout(resolve, 200);
+    }
+  });
+}
+
+/**
+ * Loads the observations between the baseline and the newest, one at a time
+ * and in idle time.
+ *
+ * buildSequence fetches only the two it measures between, so the five in the
+ * middle arrived on the first scrub into each five-minute interval — each a
+ * 27-tile round trip with the thumb waiting on it. Newest first, since a
+ * scrub back from the present meets those first.
+ *
+ * `isStale` stops it when the sequence is replaced. Continuing would not only
+ * waste bandwidth: the cache is shared across products, and a previous
+ * product's observations would evict the current one's.
+ */
+export async function prefetch(
+  seq: Sequence,
+  isStale: () => boolean,
+): Promise<void> {
+  const step = seq.product.stepMinutes * 60_000;
+  const baseline = BASELINE_MIN * 60_000;
+  for (let t = seq.latest - step; t > seq.latest - baseline; t -= step) {
+    await idle();
+    if (isStale()) return;
+    await observation(seq.product, t);
+  }
 }
 
 /** Which two observations an instant sits between. Separate from fetching

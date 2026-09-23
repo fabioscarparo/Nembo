@@ -52,6 +52,7 @@ import {
   HISTORY_MIN,
   HORIZON_MIN,
   paintAt,
+  prefetch,
   shareLut,
   shareMotion,
   STEP_MS,
@@ -157,6 +158,10 @@ export default function RadarMap() {
      where reading storage throws and the two passes would disagree. */
   const [product, setProduct] = useState<ProductKey>("VMI");
   useEffect(() => setProduct(readProduct()), []);
+  /* Read by the paint pump, which runs across awaits and has to see the
+     product as it is now, not as it was when the job was queued. */
+  const productNow = useRef(product);
+  productNow.current = product;
 
   const [latest, setLatest] = useState<number | null>(null);
   /* null means "follow live". Holding an absolute time rather than an index
@@ -624,8 +629,14 @@ export default function RadarMap() {
         // 286KB. Once per sequence.
         if (s) shareMotion(s.motion);
         setSequence(s);
-        if (s) seqAttempts.current = 0;
-        else retry();
+        if (s) {
+          seqAttempts.current = 0;
+          /* Stopped by this effect's cleanup, which runs whenever the
+             sequence is about to be replaced. */
+          void prefetch(s, () => cancelled);
+        } else {
+          retry();
+        }
       })
       /* A missing baseline is the usual cause and it fixes itself on the next
          publication. The radar keeps working without motion; it just stops
@@ -722,8 +733,21 @@ export default function RadarMap() {
           if (!next) break;
           wanted.current = null;
 
+          /* A product switch rebuilds the palette at once, and the sequence
+             only once its tiles land. A job for the previous product would pass
+             its bytes through the new product's table — 40 dBZ read as 66 mm/h.
+             Skipped instead: the frame on screen was drawn with the right table
+             and stays until the new sequence replaces it. */
+          if (next.seq.product.key !== productNow.current) continue;
+
           const frame = await paintAt(next.seq, next.time, currentLut());
-          if (map.current !== m) continue;
+          /* Checked again, because either can change during the await. A frame
+             that is not handed to the source is released here, or nothing
+             would ever close its bitmap. */
+          if (map.current !== m || next.seq.product.key !== productNow.current) {
+            frame?.painted?.image.close();
+            continue;
+          }
 
           /* null means the stitch lost every tile, not that the sky is clear
              — an empty sky is a field of zeroes. The queue is already drained
@@ -752,6 +776,7 @@ export default function RadarMap() {
           /* The source arrives with the style, which MapLibre parses on its
              own schedule. Same drained-queue dead end as the branch above. */
           if (!src) {
+            painted?.image.close();
             if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
               coldRetries.current += 1;
               wanted.current = next;
@@ -781,6 +806,11 @@ export default function RadarMap() {
             everPainted.current = true;
             coldRetries.current = 0;
           } catch {
+            /* Handed over rather than closed: updateImage stores the image
+               before the steps that can throw, so the source may hold it. As
+               the current bitmap it is released by the next hand-over, which
+               is correct whether the source kept it or not. */
+            if (painted) handOver(painted.image);
             if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
               coldRetries.current += 1;
               wanted.current = next;
@@ -1007,14 +1037,16 @@ export default function RadarMap() {
   const watch = useRef<number | null>(null);
   const flown = useRef(false);
 
-  const startWatching = useCallback(() => {
+  /* `quiet` resumes a watch the page itself paused, which is not the visitor
+     asking to be located: no busy state on the button. */
+  const startWatching = useCallback((quiet = false) => {
     if (watch.current !== null) return true;
     if (!navigator.geolocation) {
       setLocationAvailable(false);
       return false;
     }
 
-    setLocating(true);
+    if (!quiet) setLocating(true);
     watch.current = navigator.geolocation.watchPosition(
       (fix) => {
         setLocating(false);
@@ -1041,6 +1073,27 @@ export default function RadarMap() {
   useEffect(() => {
     autoStart.current = startWatching;
   }, [startWatching]);
+
+  /* Paused while the page is hidden, like every timer in lib/visibility.ts.
+     A watch keeps the location service running for as long as it exists,
+     and a backgrounded tab has no pin anyone can see. Resumed quietly on
+     return; `flown` survives the pause, so the camera does not fly again. */
+  const resumeWatch = useRef(false);
+  useEffect(() => {
+    if (visible) {
+      if (resumeWatch.current) {
+        resumeWatch.current = false;
+        startWatching(true);
+      }
+      return;
+    }
+    if (watch.current !== null) {
+      navigator.geolocation?.clearWatch(watch.current);
+      watch.current = null;
+      resumeWatch.current = true;
+      setLocating(false);
+    }
+  }, [visible, startWatching]);
 
   useEffect(() => {
     return () => {
