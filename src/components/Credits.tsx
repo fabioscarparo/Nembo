@@ -27,11 +27,14 @@ function useAge(at: number | undefined) {
   const [now, setNow] = useState(() => Date.now());
   const visible = usePageVisible();
 
-  /* Stopped while hidden, and resynced the moment the page comes back: a
-     clock that keeps ticking in a background tab is work for nobody, and one
-     that resumes without catching up would claim the data is two minutes old
-     an hour later — the exact failure this hook exists to avoid. */
-  useVisibleInterval(() => setNow(Date.now()), 30_000, visible);
+  /* Stopped while hidden or before the first scan lands, and resynced the
+     moment the page comes back or a new scan arrives. */
+  useVisibleInterval(
+    () => setNow(Date.now()),
+    30_000,
+    visible && at !== undefined,
+    at,
+  );
 
   if (at === undefined) return null;
   // Clocks disagree; a scan cannot be from the future, so clamp rather than

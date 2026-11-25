@@ -81,6 +81,13 @@ const TICK_PITCH = 12;
 /** The fewest marks that still read as a scale rather than as a few notches. */
 const MIN_TICKS = 11;
 
+/** Cached formatter: `toLocaleTimeString` with options rebuilds an Intl
+ *  formatter per call, and the readout updates ~11 times a second in playback. */
+const CLOCK = new Intl.DateTimeFormat("it-IT", {
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 /**
  * Marks for a track this wide.
  *
@@ -94,7 +101,7 @@ const MIN_TICKS = 11;
 function tickCountFor(width: number, frames: number): number {
   const ideal = Math.round(width / TICK_PITCH);
   const snapped = Math.round((ideal - 1) / MAJOR) * MAJOR + 1;
-  return Math.max(MIN_TICKS, Math.min(frames, snapped));
+  return Math.min(frames, Math.max(MIN_TICKS, snapped));
 }
 
 /**
@@ -208,14 +215,24 @@ export default function Timeline({
     );
   }, []);
 
+  /* Active teardown for an in-flight scrub-end unlock, cancelled if a new drag
+     starts within the 420ms collapse window or if the component unmounts. */
+  const endCleanup = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => endCleanup.current?.(), []);
+
   /* Final density set before the row moves. Below `sm` only — nothing
      collapses above it. */
   const beginScrub = useCallback(() => {
+    endCleanup.current?.();
+    endCleanup.current = null;
     setScrubbing(true);
     if (!window.matchMedia("(max-width: 639px)").matches) return;
     const target = expandedTrack();
     if (target <= 0) return;
-    restingTrack.current = track.current?.getBoundingClientRect().width ?? 0;
+    if (!locked.current) {
+      restingTrack.current = track.current?.getBoundingClientRect().width ?? 0;
+    }
     setPulses((prev) => {
       const next = tickCountFor(target, frames.length);
       return prev.length === next ? prev : Array(next).fill(0);
@@ -229,8 +246,11 @@ export default function Timeline({
      does not refit against widths the row is only passing through. */
   const endScrub = useCallback(() => {
     setScrubbing(false);
-    const pill = ruler.current;
-    if (!pill || !locked.current) return;
+    const row = strip.current;
+    if (!row || !locked.current) return;
+
+    endCleanup.current?.();
+    endCleanup.current = null;
 
     if (restingTrack.current > 0) {
       setPulses((prev) => {
@@ -240,14 +260,15 @@ export default function Timeline({
     }
 
     let settled = false;
+    const cleanup = () => {
+      row.removeEventListener("transitionend", onEnd);
+      window.clearTimeout(timer);
+      if (endCleanup.current === cleanup) endCleanup.current = null;
+    };
     const done = () => {
-      /* Both paths below can fire — a transition that runs and a timeout that
-         was already scheduled — and the second must not undo the refit the
-         first did. */
       if (settled) return;
       settled = true;
-      pill.removeEventListener("transitionend", done);
-      window.clearTimeout(timer);
+      cleanup();
       locked.current = false;
       /* One last fit against the real width, in case the viewport changed
          while the row was open and the remembered figure is stale. Normally
@@ -255,13 +276,15 @@ export default function Timeline({
       const el = track.current;
       if (el) fitTicks(el.getBoundingClientRect().width);
     };
-    pill.addEventListener("transitionend", done, { once: true });
-    /* A transition that never runs — reduced motion, or a release in the same
-       frame as the press — would otherwise leave the lock on for good. When
-       it is the timeout that wins, `done` takes the listener off itself:
-       `once` only removes a listener that has fired, and one per gesture
-       accumulates on the same element. */
+    /* Listen on `.t-strip`'s own `column-gap` transition (420ms) rather than
+       `.t-strip-ruler`, which has no width transition and otherwise caught
+       bubbling 200ms transitions from TextMorph / `.t-lead`. */
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target === row && e.propertyName === "column-gap") done();
+    };
+    row.addEventListener("transitionend", onEnd);
     const timer = window.setTimeout(done, 500);
+    endCleanup.current = cleanup;
   }, [fitTicks, frames.length]);
 
   useLayoutEffect(() => {
@@ -348,14 +371,19 @@ export default function Timeline({
     [applyIndex, frames.length],
   );
 
+  const finishDrag = useCallback(
+    (playRelease: boolean) => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      if (playRelease) sound.release();
+      endScrub();
+    },
+    [sound, endScrub],
+  );
+
   const ahead = index > nowIndex;
   const minutesAhead = Math.round((value - frames[nowIndex]) / 60_000);
-
-  const clock = (t: number) =>
-    new Date(t).toLocaleTimeString("it-IT", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+  const formattedClock = CLOCK.format(value);
 
   /* Where the present falls along the track, as a fraction. The ruler is
      decorative and does not line up with frames one for one, so the marker
@@ -440,12 +468,12 @@ export default function Timeline({
             aria-label="Momento della sequenza radar"
             aria-valuetext={
               !ahead
-                ? clock(value)
+                ? formattedClock
                 : forecastSource === "none"
-                  ? "previsione non disponibile"
+                  ? `${formattedClock}, previsione non disponibile`
                   : forecastSource === "model"
-                    ? `previsione a ${minutesAhead} minuti, dal vento di trascinamento anziché dal moto misurato dell'eco`
-                    : `previsione a ${minutesAhead} minuti`
+                    ? `${formattedClock}, previsione a ${minutesAhead} minuti, dal vento di trascinamento anziché dal moto misurato dell'eco`
+                    : `${formattedClock}, previsione a ${minutesAhead} minuti`
             }
             /* Spends the gesture that starts the drag on a silent note, so
                the AudioContext is already unlocked when the first real detent
@@ -453,6 +481,7 @@ export default function Timeline({
                swallows that first tick — the one that tells you the control
                is live — and the scrub feels mute until the second frame. */
             onPointerDown={(e) => {
+              if (e.button !== 0) return;
               sound.prime();
               beginScrub();
               dragging.current = true;
@@ -465,24 +494,13 @@ export default function Timeline({
             onPointerMove={(e) => {
               if (dragging.current) seek(e.currentTarget, e.clientX);
             }}
-            /* Letting go, once. `onPointerUp` misses the drag that ends off
-               the element and the gesture the browser cancels, and the range
-               has pointer capture, so both are routed back here. */
-            onPointerUp={(e) => {
-              dragging.current = false;
-              sound.release();
-              endScrub();
-            }}
-            onPointerCancel={(e) => {
-              dragging.current = false;
-              sound.release();
-              endScrub();
-            }}
+            /* Guarded by `dragging.current` inside `finishDrag`, so the
+               `lostpointercapture` that always follows `pointerup` is a no-op
+               instead of calling `endScrub` twice. */
+            onPointerUp={() => finishDrag(true)}
+            onPointerCancel={() => finishDrag(true)}
             /* A capture lost to a system gesture fires neither handler above. */
-            onLostPointerCapture={(e) => {
-              dragging.current = false;
-              endScrub();
-            }}
+            onLostPointerCapture={() => finishDrag(false)}
             /* Arrow keys, Home and End. A pointer drag is handled above and
                reaches the same applyIndex, so a native change that repeats it
                is dropped by its own no-op test. */
@@ -531,7 +549,7 @@ export default function Timeline({
               respectReducedMotion
               className={ahead ? "text-fg-soft" : "text-fg"}
             >
-              {clock(value)}
+              {formattedClock}
             </TextMorph>
             {/* The slot is always here, whether or not there is a lead to put
                 in it. Rendered only when ahead, it pushed the clock 32px to the

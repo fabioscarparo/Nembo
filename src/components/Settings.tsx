@@ -14,7 +14,7 @@
  * are mutually exclusive and dismissed by pressing anywhere else — that part
  * lives in RadarMap, which owns both open states.
  */
-import { memo, useCallback, useMemo, useRef } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Mobile, Palette, Personalcard, VolumeHigh } from "reicon-react";
 
 import { THEME_CYCLE, type ThemeChoice } from "@/lib/theme";
@@ -75,6 +75,8 @@ type Props = {
   /** Called with the chosen theme, including the current one — RadarMap is
    *  where that is turned into a no-op, because it owns the side effects. */
   onPickTheme: (choice: ThemeChoice) => void;
+  /** False until stored preferences are hydrated, suppressing mount-time pill slide. */
+  hydrated: boolean;
 };
 
 /** The visible names. "Sistema" rather than "Auto": it is what the OS is
@@ -100,20 +102,22 @@ function Settings({
   onToggleHaptics,
   theme,
   onPickTheme,
+  hydrated,
 }: Props) {
   /* The thumb's keyframes must not run on mount — the "off" animation would
      play on every load for anyone who has muted, from a position the thumb
-     was never in. The class arrives on the first interaction and stays. */
-  const touchedSound = useRef(false);
-  const touchedHaptics = useRef(false);
+     was never in. State (not a ref) so render stays pure; flips once per
+     session and batches with the parent toggle update. */
+  const [touchedSound, setTouchedSound] = useState(false);
+  const [touchedHaptics, setTouchedHaptics] = useState(false);
 
   const flipSound = useCallback(() => {
-    touchedSound.current = true;
+    setTouchedSound(true);
     onToggleSound();
   }, [onToggleSound]);
 
   const flipHaptics = useCallback(() => {
-    touchedHaptics.current = true;
+    setTouchedHaptics(true);
     onToggleHaptics();
   }, [onToggleHaptics]);
 
@@ -125,6 +129,7 @@ function Settings({
 
   return (
     <div
+      id="settings-panel"
       className={`dock-panel dock-surface w-64 rounded-2xl p-4 ${place}`}
       data-open={open}
       /* Closed, it leaves the tab order and the accessibility tree rather than
@@ -161,7 +166,7 @@ function Settings({
           aria-checked={!muted}
           aria-labelledby="settings-sound"
           onClick={flipSound}
-          className={`t-toggle${touchedSound.current ? " is-init" : ""}`}
+          className={`t-toggle${touchedSound ? " is-init" : ""}`}
           data-on={!muted}
         >
           <span className="t-toggle-thumb" />
@@ -182,7 +187,7 @@ function Settings({
           aria-checked={hapticsOn}
           aria-labelledby="settings-haptics"
           onClick={flipHaptics}
-          className={`t-toggle${touchedHaptics.current ? " is-init" : ""}`}
+          className={`t-toggle${touchedHaptics ? " is-init" : ""}`}
           data-on={hapticsOn}
         >
           <span className="t-toggle-thumb" />
@@ -205,6 +210,7 @@ function Settings({
           value={theme}
           onPick={onPickTheme}
           labelledBy="settings-theme"
+          animate={hydrated}
           className="t-tabs-fill min-w-0 flex-1 text-[11px] font-medium"
         />
       </div>

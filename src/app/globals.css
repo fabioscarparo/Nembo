@@ -22,9 +22,7 @@
   --border: #e8e8e8;
   --surface: rgba(255, 255, 255, 0.72);
   --hover: rgba(0, 0, 0, 0.05);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
 
-  --duration-micro: 80ms;
   --duration-quick: 150ms;
   --duration-fast: 250ms;
   --duration-medium: 350ms;
@@ -47,7 +45,6 @@
   --control-h: 44px;
 
   --distance-base: 8px;
-  --blur-medium: 3px;
   /* Deeper than the portfolio's text blur on purpose: three pixels reads as
      a soft edge, and this has to read as out of focus before it resolves. */
   --panel-blur: 10px;
@@ -105,7 +102,6 @@
   --border: #222222;
   --surface: rgba(26, 26, 26, 0.72);
   --hover: rgba(255, 255, 255, 0.08);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.5);
 
   --map-land: #101010;
   --map-water: #0a0a0a;
@@ -204,14 +200,28 @@ body {
   transition: color var(--duration-fast) var(--ease-smooth-out);
 }
 
-.dark .dock-btn {
-  color: var(--fg-soft);
-}
-
 @media (hover: hover) {
   .dock-btn:hover {
     color: var(--fg);
   }
+}
+
+/* Safe-area offsets matching viewportFit: "cover" so floating chrome clears
+   the iOS status bar / Dynamic Island and Home Indicator in standalone mode. */
+.safe-top {
+  top: calc(1rem + env(safe-area-inset-top));
+  padding-left: calc(1rem + env(safe-area-inset-left));
+  padding-right: calc(1rem + env(safe-area-inset-right));
+}
+
+.safe-right {
+  right: calc(1rem + env(safe-area-inset-right));
+}
+
+.safe-bottom {
+  padding-left: calc(1rem + env(safe-area-inset-left));
+  padding-right: calc(1rem + env(safe-area-inset-right));
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
 }
 
 /* A dock button at the timeline's own height, for the one that sits beside it
@@ -241,8 +251,9 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   :root {
-    /* The loop never plays itself; the scrubber still works by hand. */
-    --frame-dur: 0ms;
+    /* Playback is strictly user-initiated; keep it working at a calmer
+       cadence rather than breaking the explicit Play control. */
+    --frame-dur: 180ms;
   }
 }
 
@@ -419,18 +430,19 @@ body {
 }
 
 .tick-marks span {
+  --tick-pulse-scale: 3.667;
   width: 1px;
   height: var(--tick-rest-height);
   border-radius: 999px;
   background: var(--fg);
   opacity: var(--tick-rest-opacity);
   flex: none;
-  will-change: height, opacity;
 }
 
 .tick-marks span.is-step {
   --tick-rest-height: 11px;
   --tick-rest-opacity: 0.55;
+  --tick-pulse-scale: 2;
   width: 2px;
 }
 
@@ -442,21 +454,21 @@ body {
 }
 
 /* The wake. A mark the thumb has just crossed snaps to full height, holds for
-   a couple of frames, then falls back to rest. Held briefly at the top rather
-   than reversing immediately — without that pause the jump reads as a flicker
-   instead of as something struck. */
+   a couple of frames, then falls back to rest. Animates transform: scaleY
+   rather than height so it stays on the compositor without layout thrash. */
 .tick-marks span.is-pulsing {
+  will-change: transform, opacity;
   animation: tick-fall 0.32s cubic-bezier(0.22, 0.8, 0.3, 1) both;
 }
 
 @keyframes tick-fall {
   0%,
   7% {
-    height: var(--tick-active-height);
+    transform: scaleY(var(--tick-pulse-scale));
     opacity: 0.86;
   }
   to {
-    height: var(--tick-rest-height);
+    transform: scaleY(1);
     opacity: var(--tick-rest-opacity);
   }
 }
@@ -823,12 +835,12 @@ body {
   padding: 0;
 }
 
-.t-tab[aria-selected="true"] {
+.t-tab[aria-checked="true"] {
   color: var(--fg);
 }
 
 @media (hover: hover) {
-  .t-tab:not([aria-selected="true"]):hover {
+  .t-tab:not([aria-checked="true"]):hover {
     color: var(--fg-soft);
   }
 }

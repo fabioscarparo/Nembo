@@ -82,9 +82,9 @@ const LAMBDA = 0.25;
 /** How many of the best-evidenced blocks are tried as a consensus seed. */
 const SEEDS = 4;
 
-/** Half-width of the agreement window, in coarse pixels per minute, added to
- *  a term proportional to the speed. About 8 km/h: enough that blocks in the
- *  same airflow agree, tight enough that a stray one does not. */
+/** Half-width of the agreement window, in full-resolution pixels per minute,
+ *  added to a term proportional to the speed. About 8 km/h: enough that blocks
+ *  in the same airflow agree, tight enough that a stray one does not. */
 const TOL_FLOOR = 0.15;
 
 /**
@@ -319,6 +319,38 @@ function bilinear(p: Plane, x: number, y: number): number {
   );
 }
 
+/** Separable (2r+1)×(2r+1) box sum without running-sum subtraction drift, so
+ *  flat dry regions stay exact zero. */
+function boxSum(
+  src: Float32Array,
+  tmp: Float32Array,
+  dst: Float32Array,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const x0 = x > r ? x - r : 0;
+      const x1 = x + r < w ? x + r : w - 1;
+      let acc = 0;
+      for (let xx = x0; xx <= x1; xx++) acc += src[row + xx];
+      tmp[row + x] = acc;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    const y0 = y > r ? y - r : 0;
+    const y1 = y + r < h ? y + r : h - 1;
+    const outRow = y * w;
+    for (let x = 0; x < w; x++) {
+      let acc = 0;
+      for (let yy = y0; yy <= y1; yy++) acc += tmp[yy * w + x];
+      dst[outRow + x] = acc;
+    }
+  }
+}
+
 /**
  * Displacement from `a` to `b`, in coarse pixels over whatever interval
  * separates them. Coarse-to-fine, refining the estimate at each level.
@@ -341,14 +373,15 @@ function opticalFlow(a: Coarse, b: Coarse): { u: Float32Array; v: Float32Array }
     const dst = pb[l];
     const w = src.w;
     const h = src.h;
+    const size = w * h;
 
     if (pw === 0) {
-      u = new Float32Array(w * h);
-      v = new Float32Array(w * h);
+      u = new Float32Array(size);
+      v = new Float32Array(size);
     } else {
       // Doubling the vectors with the resolution keeps them in level units.
-      const nu = new Float32Array(w * h);
-      const nv = new Float32Array(w * h);
+      const nu = new Float32Array(size);
+      const nv = new Float32Array(size);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const sx = Math.min(pw - 1, x >> 1);
@@ -363,54 +396,78 @@ function opticalFlow(a: Coarse, b: Coarse): { u: Float32Array; v: Float32Array }
     pw = w;
     ph = h;
 
-    const gx = new Float32Array(w * h);
-    const gy = new Float32Array(w * h);
+    const gx = new Float32Array(size);
+    const gy = new Float32Array(size);
+    const gx2 = new Float32Array(size);
+    const gxy = new Float32Array(size);
+    const gy2 = new Float32Array(size);
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const i = y * w + x;
-        gx[i] = (dst.v[i + 1] - dst.v[i - 1]) / 2;
-        gy[i] = (dst.v[i + w] - dst.v[i - w]) / 2;
+        const dx = (dst.v[i + 1] - dst.v[i - 1]) / 2;
+        const dy = (dst.v[i + w] - dst.v[i - w]) / 2;
+        gx[i] = dx;
+        gy[i] = dy;
+        gx2[i] = dx * dx;
+        gxy[i] = dx * dy;
+        gy2[i] = dy * dy;
       }
     }
+
+    /* Structure tensor depends only on `dst`, not on the running estimate —
+       precomputed once per level rather than rebuilt on every Gauss-Newton
+       iteration, and used to skip dry windows where gradients are all zero. */
+    const tmp = new Float32Array(size);
+    const s11 = new Float32Array(size);
+    const s12 = new Float32Array(size);
+    const s22 = new Float32Array(size);
+    boxSum(gx2, tmp, s11, w, h, FLOW_WINDOW);
+    boxSum(gxy, tmp, s12, w, h, FLOW_WINDOW);
+    boxSum(gy2, tmp, s22, w, h, FLOW_WINDOW);
 
     for (let it = 0; it < FLOW_ITERS; it++) {
       const nu = Float32Array.from(u);
       const nv = Float32Array.from(v);
 
       for (let y = 0; y < h; y++) {
+        const y0 = Math.max(1, y - FLOW_WINDOW);
+        const y1 = Math.min(h - 2, y + FLOW_WINDOW);
         for (let x = 0; x < w; x++) {
           const c = y * w + x;
-          let a11 = 0;
-          let a12 = 0;
-          let a22 = 0;
+          const a11 = s11[c];
+          const a22 = s22[c];
+          if (a11 + a22 < 1e-6) continue;
+          const a12 = s12[c];
+          const det = (a11 + FLOW_REG) * (a22 + FLOW_REG) - a12 * a12;
+          if (Math.abs(det) < 1e-6) continue;
+
+          const x0 = Math.max(1, x - FLOW_WINDOW);
+          const x1 = Math.min(w - 2, x + FLOW_WINDOW);
+          const uc = u[c];
+          const vc = v[c];
           let b1 = 0;
           let b2 = 0;
 
-          for (let dy = -FLOW_WINDOW; dy <= FLOW_WINDOW; dy++) {
-            const yy = y + dy;
-            if (yy < 1 || yy >= h - 1) continue;
-            for (let dx = -FLOW_WINDOW; dx <= FLOW_WINDOW; dx++) {
-              const xx = x + dx;
-              if (xx < 1 || xx >= w - 1) continue;
-              const i = yy * w + xx;
+          for (let yy = y0; yy <= y1; yy++) {
+            const row = yy * w;
+            for (let xx = x0; xx <= x1; xx++) {
+              const i = row + xx;
+              const gxi = gx[i];
+              const gyi = gy[i];
+              if (gxi === 0 && gyi === 0) continue;
               // `a` pulled back along the running estimate, against `b`.
-              const it0 = bilinear(src, xx - u[c], yy - v[c]) - dst.v[i];
-              a11 += gx[i] * gx[i];
-              a12 += gx[i] * gy[i];
-              a22 += gy[i] * gy[i];
-              b1 += gx[i] * it0;
-              b2 += gy[i] * it0;
+              const it0 = bilinear(src, xx - uc, yy - vc) - dst.v[i];
+              b1 += gxi * it0;
+              b2 += gyi * it0;
             }
           }
 
-          const det = (a11 + FLOW_REG) * (a22 + FLOW_REG) - a12 * a12;
-          if (Math.abs(det) < 1e-6) continue;
           const du = ((a22 + FLOW_REG) * b1 - a12 * b2) / det;
           const dv = ((a11 + FLOW_REG) * b2 - a12 * b1) / det;
           if (!Number.isFinite(du) || !Number.isFinite(dv)) continue;
 
-          nu[c] = u[c] + Math.max(-FLOW_MAX_STEP, Math.min(FLOW_MAX_STEP, du));
-          nv[c] = v[c] + Math.max(-FLOW_MAX_STEP, Math.min(FLOW_MAX_STEP, dv));
+          nu[c] = uc + Math.max(-FLOW_MAX_STEP, Math.min(FLOW_MAX_STEP, du));
+          nv[c] = vc + Math.max(-FLOW_MAX_STEP, Math.min(FLOW_MAX_STEP, dv));
         }
       }
       u = nu;
@@ -516,6 +573,23 @@ function consensusFlow(
         }
       }
       if (!matched) continue;
+
+      /* Refine ±1 coarse pixel around the coarse winner: halves velocity
+         quantisation from ~29 km/h to ~14.5 km/h for 8 extra evaluations, so
+         slow-moving cells are not snapped to zero and rejected by MIN_FLOW. */
+      const cx = bdx;
+      const cy = bdy;
+      for (let dy = Math.max(-SEARCH, cy - 1); dy <= Math.min(SEARCH, cy + 1); dy++) {
+        for (let dx = Math.max(-SEARCH, cx - 1); dx <= Math.min(SEARCH, cx + 1); dx++) {
+          if (dx === cx && dy === cy) continue;
+          const sc = score(dx, dy);
+          if (sc < best) {
+            best = sc;
+            bdx = dx;
+            bdy = dy;
+          }
+        }
+      }
 
       found.push({ u: (bdx * DOWN) / minutes, v: (bdy * DOWN) / minutes, echo });
     }

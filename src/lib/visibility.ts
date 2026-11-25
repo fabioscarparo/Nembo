@@ -116,11 +116,28 @@ export function useVisibleInterval(
       latest.current(controller.signal);
     };
 
-    if (changed || Date.now() - ranAt.current >= every) run();
+    const elapsed = Date.now() - ranAt.current;
+    let intervalId = 0;
+    let delayId = 0;
 
-    const id = window.setInterval(run, every);
-    /* The timer, and nothing else. See the note above on why an abort does
+    if (changed || elapsed >= every) {
+      run();
+      intervalId = window.setInterval(run, every);
+    } else {
+      /* Wait only the remainder of the current period rather than starting a
+         fresh full interval, so returning from a hidden tab right before
+         expiry does not double the refresh gap. */
+      delayId = window.setTimeout(() => {
+        run();
+        intervalId = window.setInterval(run, every);
+      }, every - elapsed);
+    }
+
+    /* The timers, and nothing else. See the note above on why an abort does
        not belong here. */
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearTimeout(delayId);
+      window.clearInterval(intervalId);
+    };
   }, [visible, every, resetKey]);
 }

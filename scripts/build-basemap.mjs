@@ -40,35 +40,39 @@ function roundRing(ring) {
   return out.length >= 4 ? out : null;
 }
 
+function polyIntersectsView(poly) {
+  for (const [lon, lat] of poly[0]) {
+    if (
+      lon >= VIEW.west &&
+      lon <= VIEW.east &&
+      lat >= VIEW.south &&
+      lat <= VIEW.north
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function roundGeometry(geom) {
   if (geom.type === "Polygon") {
+    if (!polyIntersectsView(geom.coordinates)) return null;
     const rings = geom.coordinates.map(roundRing).filter(Boolean);
     return rings.length ? { type: "Polygon", coordinates: rings } : null;
   }
   if (geom.type === "MultiPolygon") {
+    /* Filter per polygon so overseas territories outside VIEW are dropped
+       rather than carried along with the mainland. */
     const polys = geom.coordinates
+      .filter(polyIntersectsView)
       .map((poly) => poly.map(roundRing).filter(Boolean))
       .filter((poly) => poly.length > 0);
-    return polys.length ? { type: "MultiPolygon", coordinates: polys } : null;
+    if (!polys.length) return null;
+    return polys.length === 1
+      ? { type: "Polygon", coordinates: polys[0] }
+      : { type: "MultiPolygon", coordinates: polys };
   }
   return null;
-}
-
-function intersectsView(geom) {
-  const polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
-  for (const poly of polys) {
-    for (const [lon, lat] of poly[0]) {
-      if (
-        lon >= VIEW.west &&
-        lon <= VIEW.east &&
-        lat >= VIEW.south &&
-        lat <= VIEW.north
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 const res = await fetch(SOURCE);
@@ -77,7 +81,7 @@ const world = await res.json();
 
 const features = [];
 for (const f of world.features) {
-  if (!f.geometry || !intersectsView(f.geometry)) continue;
+  if (!f.geometry) continue;
   const geometry = roundGeometry(f.geometry);
   if (!geometry) continue;
   /* No properties at all. Nothing in this app styles by country or labels
@@ -86,7 +90,8 @@ for (const f of world.features) {
 }
 
 const out = { type: "FeatureCollection", features };
-writeFileSync("public/coastline.geojson", JSON.stringify(out));
+const json = JSON.stringify(out);
+writeFileSync("public/coastline.geojson", json);
 
-const kb = (JSON.stringify(out).length / 1024).toFixed(1);
+const kb = (Buffer.byteLength(json) / 1024).toFixed(1);
 console.log(`public/coastline.geojson — ${features.length} paesi, ${kb} kB`);

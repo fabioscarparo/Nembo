@@ -69,14 +69,34 @@ function Scale({
   const { gradient, unit, max, legend } = useMemo(() => {
     const lut = currentLut();
     const p = PRODUCTS[product];
+    const bands = p.legend.bands;
+    const span = p.srcMax - p.srcMin;
     const stops: string[] = [];
 
-    for (let i = 0; i <= 32; i++) {
-      const byte = Math.round((i / 32) * 255);
+    /* Piecewise-linear sampling across the legend's band thresholds rather than
+       linearly across 0..255: the numeric ticks underneath sit at uniform
+       positions (0%, 25%, 50%, 75%, 100%), so sampling the LUT across those
+       same intervals guarantees every number aligns with the exact colour the
+       radar paints for that physical value. */
+    const segments = Math.max(1, bands.length - 1);
+    const perSeg = 8;
+    const total = segments * perSeg;
+
+    for (let i = 0; i <= total; i++) {
+      const seg = Math.min(segments - 1, Math.floor(i / perSeg));
+      const frac = (i - seg * perSeg) / perSeg;
+      const v =
+        bands.length >= 2
+          ? bands[seg].at + (bands[seg + 1].at - bands[seg].at) * frac
+          : p.srcMin + (i / total) * span;
+      const byte =
+        span > 0
+          ? Math.max(0, Math.min(255, Math.round(((v - p.srcMin) / span) * 255)))
+          : 0;
       const o = byte * 4;
       const a = lut[o + 3] / 255;
       stops.push(
-        `rgba(${lut[o]}, ${lut[o + 1]}, ${lut[o + 2]}, ${a.toFixed(3)}) ${((i / 32) * 100).toFixed(1)}%`,
+        `rgba(${lut[o]}, ${lut[o + 1]}, ${lut[o + 2]}, ${a.toFixed(3)}) ${((i / total) * 100).toFixed(1)}%`,
       );
     }
 
@@ -96,6 +116,7 @@ function Scale({
        across two elements, the panel animated beautifully and lost its frosted
        glass; merged, it keeps both. */
     <div
+      id="legend-panel"
       className={`dock-panel dock-surface w-64 rounded-2xl p-4 ${place}`}
       data-open={open}
       /* Closed, it is not just invisible: `inert` takes it out of the tab
@@ -103,29 +124,30 @@ function Scale({
          alone would do only once the transition had finished. */
       inert={!open}
       aria-hidden={!open}
+      role="group"
+      aria-labelledby="legend-title"
     >
-      <>
-        <div className="text-fg text-[14px] font-medium">
-          {legend.title} ({unit})
-        </div>
-        <p className="text-muted mt-1 text-[13px] leading-snug">{legend.blurb}</p>
+      <div id="legend-title" className="text-fg text-[14px] font-medium">
+        {legend.title} ({unit})
+      </div>
+      <p className="text-muted mt-1 text-[13px] leading-snug">{legend.blurb}</p>
 
-        {/* Checkered behind the bar, because the low end of this palette is
-            transparent and a flat backing would show it as a solid colour. */}
-        <div className="legend-bar mt-3">
-          <div className="h-3 w-full rounded-full" style={{ background: gradient }} />
-        </div>
+      {/* Checkered behind the bar, because the low end of this palette is
+          transparent and a flat backing would show it as a solid colour. */}
+      <div className="legend-bar mt-3">
+        <div className="h-3 w-full rounded-full" style={{ background: gradient }} />
+      </div>
 
-        <div className="text-muted numeric mt-2 flex justify-between text-[12px]">
-          {legend.bands.map((b) => (
-            <span key={b.at}>{b.at}</span>
-          ))}
-        </div>
+      <div className="text-muted numeric mt-2 flex justify-between text-[12px]">
+        {legend.bands.map((b) => (
+          <span key={b.at}>{b.at}</span>
+        ))}
+      </div>
 
-        <div className="mt-3 space-y-1">
-          {legend.bands.map((b, i) => {
-            const Icon = ICONS[Math.min(ICONS.length - 1, i)];
-            return (
+      <div className="mt-3 space-y-1">
+        {legend.bands.map((b, i) => {
+          const Icon = ICONS[Math.min(ICONS.length - 1, i)];
+          return (
             <div key={b.at} className="flex items-center justify-between text-[13px]">
               <span className="text-fg-soft flex items-center gap-2">
                 {/* Inherits the label's colour, so the two read as one item
@@ -137,12 +159,11 @@ function Scale({
                 {b.at === max ? `${b.at}+` : `${b.at}`} {unit}
               </span>
             </div>
-            );
-          })}
-        </div>
+          );
+        })}
+      </div>
 
-        <p className="text-muted mt-3 text-[13px] leading-snug">{legend.note}</p>
-      </>
+      <p className="text-muted mt-3 text-[13px] leading-snug">{legend.note}</p>
     </div>
   );
 }

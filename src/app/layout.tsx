@@ -119,8 +119,7 @@ export const viewport: Viewport = {
 };
 
 /**
- * Runs before first paint, same contract as the portfolio's: mark the
- * document JS-capable, then apply the stored theme (system unless the visitor
+ * Runs before first paint: applies the stored theme (system unless the visitor
  * picked one) so the colours never flash.
  *
  * It matters more here than on a text page. The radar's palette is built by
@@ -130,7 +129,6 @@ export const viewport: Viewport = {
  */
 const bootScript = `
 (function () {
-  document.documentElement.classList.add("js");
   try {
     var stored = localStorage.getItem("theme");
     var choice = stored === "light" || stored === "dark" ? stored : "system";

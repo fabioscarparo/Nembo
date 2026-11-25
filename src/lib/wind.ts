@@ -124,8 +124,9 @@ export async function fetchSteering(
     `&longitude=${lons.map((n) => n.toFixed(3)).join(",")}` +
     `&hourly=${hourly}` +
     /* Metres per second, so the conversion to pixels is one division by the
-       Mercator scale rather than two by it and 3.6. */
-    "&wind_speed_unit=ms&forecast_days=1&timezone=UTC";
+       Mercator scale rather than two by it and 3.6. Two days so a client clock
+       slightly past UTC midnight still finds the current hour. */
+    "&wind_speed_unit=ms&forecast_days=2&timezone=UTC";
 
   try {
     const res = await fetch(url, { signal });

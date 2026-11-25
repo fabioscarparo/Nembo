@@ -78,14 +78,35 @@ export type Tile = { red: Uint8Array; mask: Uint8Array; w: number; h: number };
  */
 const missing = new Set<string>();
 
+/** Coordinates that have answered 200 OK at least once this session: a later
+ *  pair of transient 403s (e.g. early polls) must never permanently blacklist
+ *  a tile we already proved exists. */
+const confirmed = new Set<string>();
+
 /** First unexplained refusal per coordinate, and when it was asked for. */
 const refusedOnce = new Map<string, number>();
+
+/** Reused offscreen canvas for synchronous WebP decode (27 tiles per scan). */
+let decodeCanvas: OffscreenCanvas | null = null;
+let decodeCtx: OffscreenCanvasRenderingContext2D | null = null;
+
+function decodeContext(w: number, h: number): OffscreenCanvasRenderingContext2D | null {
+  if (!decodeCanvas) {
+    decodeCanvas = new OffscreenCanvas(w, h);
+    decodeCtx = decodeCanvas.getContext("2d", { willReadFrequently: true });
+  } else if (decodeCanvas.width !== w || decodeCanvas.height !== h) {
+    decodeCanvas.width = w;
+    decodeCanvas.height = h;
+  }
+  return decodeCtx;
+}
 
 /**
  * Records a refusal and reports whether the coordinate is now believed
  * absent. Transient failures never get here — see the status check below.
  */
 function refuse(key: string, time: number): void {
+  if (confirmed.has(key)) return;
   const first = refusedOnce.get(key);
   if (first === undefined) {
     refusedOnce.set(key, time);
@@ -137,6 +158,8 @@ export async function fetchTile(
       }
       return null;
     }
+    confirmed.add(coord);
+    refusedOnce.delete(coord);
     bitmap = await createImageBitmap(await res.blob());
   } catch (err) {
     if (signal?.aborted) throw err;
@@ -144,8 +167,7 @@ export async function fetchTile(
   }
 
   const { width: w, height: h } = bitmap;
-  const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = decodeContext(w, h);
   if (!ctx) {
     // The bitmap is already decoded; leaving by this door still has to free it.
     bitmap.close();

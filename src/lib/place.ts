@@ -86,12 +86,19 @@ async function fetchWeather(
     if (!res.ok) return null;
 
     const current = (await res.json())?.current;
-    if (typeof current?.temperature_2m !== "number") return null;
+    if (
+      typeof current?.temperature_2m !== "number" ||
+      !Number.isFinite(current.temperature_2m) ||
+      typeof current?.weather_code !== "number" ||
+      !Number.isFinite(current.weather_code)
+    ) {
+      return null;
+    }
 
     return {
       temperature: Math.round(current.temperature_2m),
       isDay: current.is_day === 1,
-      ...describe(Number(current.weather_code)),
+      ...describe(current.weather_code),
     };
   } catch {
     return null;

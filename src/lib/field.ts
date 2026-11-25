@@ -111,14 +111,21 @@ export function motionAt(m: Motion, x: number, y: number): [number, number] {
   const y1 = Math.min(DH - 1, y0 + 1);
   const fx = cx - x0;
   const fy = cy - y0;
+  const wx0 = 1 - fx;
+  const wy0 = 1 - fy;
+  const i00 = y0 * DW + x0;
+  const i10 = y0 * DW + x1;
+  const i01 = y1 * DW + x0;
+  const i11 = y1 * DW + x1;
+  const w00 = wx0 * wy0;
+  const w10 = fx * wy0;
+  const w01 = wx0 * fy;
+  const w11 = fx * fy;
 
-  const at = (arr: Float32Array) =>
-    arr[y0 * DW + x0] * (1 - fx) * (1 - fy) +
-    arr[y0 * DW + x1] * fx * (1 - fy) +
-    arr[y1 * DW + x0] * (1 - fx) * fy +
-    arr[y1 * DW + x1] * fx * fy;
-
-  return [at(m.u), at(m.v)];
+  return [
+    m.u[i00] * w00 + m.u[i10] * w10 + m.u[i01] * w01 + m.u[i11] * w11,
+    m.v[i00] * w00 + m.v[i10] * w10 + m.v[i01] * w01 + m.v[i11] * w11,
+  ];
 }
 
 /* ── Warping ────────────────────────────────────────────────── */
@@ -149,21 +156,33 @@ const TRAJ_Y = Math.ceil(H / TRAJ);
 type Displacement = { dx: Float32Array; dy: Float32Array };
 
 /**
- * Integrates every trajectory cell backwards through the flow and returns
- * where each one came from. See the note above `type Displacement` for why
- * the grid is coarser than the flow.
+ * Integrates only the trajectory cells that overlap `box` backwards through the
+ * flow and returns where each one came from. See the note above
+ * `type Displacement` for why the grid is coarser than the flow.
  */
-function displacementFor(motion: Motion, minutes: number): Displacement {
+function displacementFor(motion: Motion, minutes: number, box: Box): Displacement {
   const dx = new Float32Array(TRAJ_X * TRAJ_Y);
   const dy = new Float32Array(TRAJ_X * TRAJ_Y);
 
   const steps = Math.max(1, Math.min(8, Math.round(Math.abs(minutes) / 5)));
   const dt = minutes / steps;
 
-  for (let by = 0; by < TRAJ_Y; by++) {
-    for (let bx = 0; bx < TRAJ_X; bx++) {
+  const bxMin = Math.max(0, Math.floor(box.x0 / TRAJ - 0.5));
+  const bxMax = Math.min(
+    TRAJ_X - 1,
+    Math.floor(Math.min(TRAJ_X - 1, Math.max(0, box.x1 / TRAJ - 0.5))) + 1,
+  );
+  const byMin = Math.max(0, Math.floor(box.y0 / TRAJ - 0.5));
+  const byMax = Math.min(
+    TRAJ_Y - 1,
+    Math.floor(Math.min(TRAJ_Y - 1, Math.max(0, box.y1 / TRAJ - 0.5))) + 1,
+  );
+
+  for (let by = byMin; by <= byMax; by++) {
+    const startY = (by + 0.5) * TRAJ;
+    const row = by * TRAJ_X;
+    for (let bx = bxMin; bx <= bxMax; bx++) {
       const startX = (bx + 0.5) * TRAJ;
-      const startY = (by + 0.5) * TRAJ;
       let px = startX;
       let py = startY;
 
@@ -173,37 +192,13 @@ function displacementFor(motion: Motion, minutes: number): Displacement {
         py -= v * dt;
       }
 
-      const k = by * TRAJ_X + bx;
+      const k = row + bx;
       dx[k] = px - startX;
       dy[k] = py - startY;
     }
   }
 
   return { dx, dy };
-}
-
-/** Bilinear across the trajectory grid, so nothing changes in steps at a seam. */
-function displacementAt(
-  d: Displacement,
-  x: number,
-  y: number,
-): [number, number] {
-  const bx = Math.min(TRAJ_X - 1, Math.max(0, x / TRAJ - 0.5));
-  const by = Math.min(TRAJ_Y - 1, Math.max(0, y / TRAJ - 0.5));
-  const x0 = Math.floor(bx);
-  const y0 = Math.floor(by);
-  const x1 = Math.min(TRAJ_X - 1, x0 + 1);
-  const y1 = Math.min(TRAJ_Y - 1, y0 + 1);
-  const fx = bx - x0;
-  const fy = by - y0;
-
-  const at = (arr: Float32Array) =>
-    arr[y0 * TRAJ_X + x0] * (1 - fx) * (1 - fy) +
-    arr[y0 * TRAJ_X + x1] * fx * (1 - fy) +
-    arr[y1 * TRAJ_X + x0] * (1 - fx) * fy +
-    arr[y1 * TRAJ_X + x1] * fx * fy;
-
-  return [at(d.dx), at(d.dy)];
 }
 
 /**
@@ -278,13 +273,60 @@ export function warp(
    * cosmetic difference: deformation by the wind is a real part of how
    * precipitation evolves, and it is the part advection can honestly claim.
    */
-  const disp = displacementFor(motion, minutes);
+  const disp = displacementFor(motion, minutes, box);
+  const dispX = disp.dx;
+  const dispY = disp.dy;
+  const srcVal = field.value;
+  const srcMask = field.mask;
+
+  /* Tighten the returned box to pixels carrying non-zero signal: `clampBox`
+     pads symmetrically in all four directions, so without tightening, +30 min
+     frames upload up to twice as much empty padding (or a blank bitmap if the
+     echo has advected off-grid). `mask` is still written across `box` so
+     `blend` sees dry air accurately where another field overlaps. */
+  let rx0 = W;
+  let ry0 = H;
+  let rx1 = -1;
+  let ry1 = -1;
 
   for (let y = box.y0; y <= box.y1; y++) {
+    const by = Math.min(TRAJ_Y - 1, Math.max(0, y / TRAJ - 0.5));
+    const ty0 = Math.floor(by);
+    const ty1 = Math.min(TRAJ_Y - 1, ty0 + 1);
+    const tfy = by - ty0;
+    const twy0 = 1 - tfy;
+    const tRow0 = ty0 * TRAJ_X;
+    const tRow1 = ty1 * TRAJ_X;
+    const dstRow = y * W;
+
     for (let x = box.x0; x <= box.x1; x++) {
-      const [ddx, ddy] = displacementAt(disp, x, y);
-      const sx = x + ddx;
-      const sy = y + ddy;
+      const bx = Math.min(TRAJ_X - 1, Math.max(0, x / TRAJ - 0.5));
+      const tx0 = Math.floor(bx);
+      const tx1 = Math.min(TRAJ_X - 1, tx0 + 1);
+      const tfx = bx - tx0;
+      const twx0 = 1 - tfx;
+      const tw00 = twx0 * twy0;
+      const tw10 = tfx * twy0;
+      const tw01 = twx0 * tfy;
+      const tw11 = tfx * tfy;
+
+      const ti00 = tRow0 + tx0;
+      const ti10 = tRow0 + tx1;
+      const ti01 = tRow1 + tx0;
+      const ti11 = tRow1 + tx1;
+
+      const sx =
+        x +
+        dispX[ti00] * tw00 +
+        dispX[ti10] * tw10 +
+        dispX[ti01] * tw01 +
+        dispX[ti11] * tw11;
+      const sy =
+        y +
+        dispY[ti00] * tw00 +
+        dispY[ti10] * tw10 +
+        dispY[ti01] * tw01 +
+        dispY[ti11] * tw11;
 
       const x0 = Math.floor(sx);
       const y0 = Math.floor(sy);
@@ -297,27 +339,35 @@ export function warp(
       const i01 = i00 + W;
       const i11 = i01 + 1;
 
-      const w00 = (1 - fx) * (1 - fy) * (field.mask[i00] ? 1 : 0);
-      const w10 = fx * (1 - fy) * (field.mask[i10] ? 1 : 0);
-      const w01 = (1 - fx) * fy * (field.mask[i01] ? 1 : 0);
-      const w11 = fx * fy * (field.mask[i11] ? 1 : 0);
+      const w00 = srcMask[i00] ? (1 - fx) * (1 - fy) : 0;
+      const w10 = srcMask[i10] ? fx * (1 - fy) : 0;
+      const w01 = srcMask[i01] ? (1 - fx) * fy : 0;
+      const w11 = srcMask[i11] ? fx * fy : 0;
       const sum = w00 + w10 + w01 + w11;
       if (sum < 0.5) continue;
 
-      const j = y * W + x;
+      const j = dstRow + x;
       const carried =
-        (field.value[i00] * w00 +
-          field.value[i10] * w10 +
-          field.value[i01] * w01 +
-          field.value[i11] * w11) /
+        (srcVal[i00] * w00 +
+          srcVal[i10] * w10 +
+          srcVal[i01] * w01 +
+          srcVal[i11] * w11) /
         sum;
 
-      value[j] = carried < 0 ? 0 : carried > 255 ? 255 : Math.round(carried);
+      const out = carried < 0 ? 0 : carried > 255 ? 255 : Math.round(carried);
+      value[j] = out;
       mask[j] = 255;
+
+      if (out > 0) {
+        if (x < rx0) rx0 = x;
+        if (x > rx1) rx1 = x;
+        if (y < ry0) ry0 = y;
+        if (y > ry1) ry1 = y;
+      }
     }
   }
 
-  return { value, mask, box };
+  return { value, mask, box: rx1 < 0 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 } };
 }
 
 /** Crossfades two already-warped fields. Where only one has data it wins
@@ -467,6 +517,8 @@ export function compose(
      switched; warping both means the picture is always in motion and the
      observations are just the moments where it agrees with the radar. */
   const t = (time - aTime) / step;
+  if (t <= 0) return a;
+  if (t >= 1) return b;
   const forward = warp(a, motion, (t * step) / 60_000, scratch[0]);
   const backward = warp(b, motion, -((1 - t) * step) / 60_000, scratch[1]);
   return blend(forward, backward, t, scratch[2]);

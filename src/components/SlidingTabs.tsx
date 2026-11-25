@@ -16,13 +16,13 @@
  *
  * @see https://transitions.dev/detail.html?t=tabs-sliding
  */
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 /** One option. Generic over the value so a caller keeps its own union — the
  *  dock's ProductKey, the panel's ThemeChoice — rather than casting strings. */
 export type TabOption<T extends string> = {
   value: T;
-  /** What the tab reads on screen. */
+  /** What the option reads on screen. */
   label: string;
   /** What it reads aloud, when the visible label is a unit or an
    *  abbreviation that would be meaningless said out of context. */
@@ -41,20 +41,23 @@ type Props<T extends string> = {
   labelledBy?: string;
   /** Extra classes on the track — sizing, and which surface it sits on. */
   className?: string;
+  /** False during initial hydration so restoring a stored choice snaps the
+   *  pill without sliding across options nobody clicked. */
+  animate?: boolean;
 };
 
 /**
- * @param options  In display order. Five or fewer, realistically — the pill
- *                 has to stay wide enough to read.
- * @param value    Which one is selected. The component is controlled; it
- *                 holds no selection of its own.
- * @param onPick   Called with the chosen value, including when it is the one
- *                 already selected — the caller decides whether that is a
- *                 no-op, because only the caller knows if it has a side
- *                 effect worth suppressing.
+ * @param options   In display order. Five or fewer, realistically — the pill
+ *                  has to stay wide enough to read the label inside it.
+ * @param value     Which one is selected. The component is controlled; it
+ *                  holds no selection of its own.
+ * @param onPick    Called with the chosen value, including when it is the one
+ *                  already selected — the caller decides whether that is a
+ *                  no-op, because only the caller knows if it has a side
+ *                  effect worth suppressing.
  * @param className Applied to the track. This is how a caller picks the
- *                 variant (`t-tabs-fill` for equal widths, `dock-tabs` for
- *                 the transparent one) as well as the type size.
+ *                  variant (`t-tabs-fill` for equal widths, `dock-tabs` for
+ *                  the transparent one) as well as the type size.
  */
 export default function SlidingTabs<T extends string>({
   options,
@@ -63,26 +66,28 @@ export default function SlidingTabs<T extends string>({
   label,
   labelledBy,
   className = "",
+  animate = true,
 }: Props<T>) {
   const bar = useRef<HTMLDivElement>(null);
   const pill = useRef<HTMLSpanElement>(null);
+  const mounted = useRef(false);
 
-  const placePill = useCallback((animate: boolean) => {
+  const placePill = useCallback((shouldAnimate: boolean) => {
     const el = bar.current;
     const p = pill.current;
     if (!el || !p) return;
 
-    const active = el.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    const active = el.querySelector<HTMLButtonElement>('[aria-checked="true"]');
     if (!active) return;
 
     /* Suspended, forced, restored. Without this the pill tweens from wherever
        it happened to be — which on first paint is x=0 with no width, so it
        would visibly grow out of the left edge on every mount, and on a resize
        it would slide to a position nobody chose. */
-    if (!animate) p.style.transition = "none";
+    if (!shouldAnimate) p.style.transition = "none";
     p.style.width = `${active.offsetWidth}px`;
     p.style.transform = `translateX(${active.offsetLeft}px)`;
-    if (!animate) {
+    if (!shouldAnimate) {
       void p.offsetWidth;
       p.style.transition = "";
     }
@@ -94,43 +99,81 @@ export default function SlidingTabs<T extends string>({
     placePill(false);
   }, [placePill, options]);
 
-  /* Animated from here on, because by now a choice has been made. */
+  /* Animated on subsequent user changes only; initial mount is already placed
+     by useLayoutEffect, and hydration swaps snap via `animate={false}`. */
   useEffect(() => {
-    placePill(true);
-  }, [value, placePill]);
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    placePill(animate);
+  }, [value, animate, placePill]);
 
   /* Labels reflow — a font landing late, a panel resizing, a viewport turning
      — and a pill measured against the old layout would sit wrong. */
   useEffect(() => {
     const el = bar.current;
     if (!el) return;
+    let alive = true;
     const observer = new ResizeObserver(() => placePill(false));
     observer.observe(el);
-    return () => observer.disconnect();
+    void document.fonts?.ready.then(() => {
+      if (alive) placePill(false);
+    });
+    return () => {
+      alive = false;
+      observer.disconnect();
+    };
   }, [placePill]);
+
+  const onKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLButtonElement>, idx: number) => {
+      let nextIdx = -1;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        nextIdx = (idx + 1) % options.length;
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        nextIdx = (idx - 1 + options.length) % options.length;
+      } else if (e.key === "Home") {
+        nextIdx = 0;
+      } else if (e.key === "End") {
+        nextIdx = options.length - 1;
+      }
+      if (nextIdx < 0) return;
+      e.preventDefault();
+      onPick(options[nextIdx].value);
+      const buttons = bar.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+      buttons?.[nextIdx]?.focus();
+    },
+    [options, onPick],
+  );
 
   return (
     <div
       ref={bar}
-      role="tablist"
+      role="radiogroup"
       aria-label={label}
       aria-labelledby={labelledBy}
       className={`t-tabs ${className}`.trim()}
     >
       <span ref={pill} className="t-tabs-pill" aria-hidden />
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="tab"
-          aria-selected={value === o.value}
-          aria-label={o.srLabel}
-          onClick={() => onPick(o.value)}
-          className="t-tab"
-        >
-          {o.label}
-        </button>
-      ))}
+      {options.map((o, i) => {
+        const active = value === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            aria-label={o.srLabel}
+            onClick={() => onPick(o.value)}
+            onKeyDown={(e) => onKeyDown(e, i)}
+            className="t-tab"
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

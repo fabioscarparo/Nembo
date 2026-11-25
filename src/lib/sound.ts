@@ -23,19 +23,6 @@ import { useMemo } from "react";
 
 import { defineSound, ensureReady } from "@web-kits/audio";
 
-/**
- * The timeline's two sounds, built with the same @web-kits/audio synthesis the
- * portfolio uses. Nothing is downloaded: these are recipes, and the Web Audio
- * API renders each one on the fly.
- *
- * The detent is modelled on the axis dials in ui.camera. They ship no audio
- * files either — their tick is synthesised too — so what is reproduced here is
- * the recipe, not an asset: a band-passed noise burst with a quiet sine under
- * it. That split is the whole character. The click lives in the noise; the
- * tone alone would read as a beep, and noise alone as a rustle.
- *
- * @see https://audio.raphaelsalaja.com
- */
 const sounds = {
   /** Crossing one tick of the tape. Eighteen milliseconds, and mostly air. */
   tick: defineSound({
@@ -198,6 +185,7 @@ let muted = readMuted();
  * the module flag directly.
  */
 export function readMuted(): boolean {
+  if (typeof window === "undefined") return false;
   try {
     return localStorage.getItem(SOUND_KEY) === "off";
   } catch {

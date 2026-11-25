@@ -19,13 +19,14 @@ import type { Motion } from "./flow";
 type Incoming =
   | { k: "lut"; lut: Uint8Array }
   | { k: "obs"; key: string; value: Uint8Array; mask: Uint8Array; box: Field["box"] }
+  | { k: "touch"; key: string }
   | { k: "seq"; motion: Motion }
   | {
       k: "render";
       id: number;
       time: number;
-      aKey: string;
-      bKey: string;
+      aKey: string | null;
+      bKey: string | null;
       aTime: number;
       step: number;
       ahead: boolean;
@@ -37,9 +38,17 @@ const observations = new Map<string, Field>();
 let motion: Motion | null = null;
 let lut: Uint8Array | null = null;
 
-/** Matches nowcast.ts's CACHE_LIMIT: an hour of timeline spans 13 observations
- *  at most, and a scrub touches two at a time. */
+/** Matches nowcast.ts's CACHE_LIMIT. Maintained as LRU in lockstep. */
 const CACHE_LIMIT = 8;
+
+function getObs(key: string | null): Field | null {
+  if (key === null) return null;
+  const hit = observations.get(key);
+  if (!hit) return null;
+  observations.delete(key);
+  observations.set(key, hit);
+  return hit;
+}
 
 /* Queue of one. A drag emits requests faster than they can be served; a later
    one replaces the pending one rather than queueing behind it, so the frame
@@ -60,8 +69,15 @@ async function pump() {
         continue;
       }
 
-      const a = observations.get(job.aKey) ?? null;
-      const b = job.ahead ? null : (observations.get(job.bKey) ?? null);
+      const a = getObs(job.aKey);
+      const b = job.ahead ? null : getObs(job.bKey);
+      /* If the main thread passed a non-null key that we no longer hold,
+         report it instead of silently passing null into `compose` and drawing
+         the other observation unwarped. */
+      if ((job.aKey !== null && !a) || (!job.ahead && job.bKey !== null && !b)) {
+        self.postMessage({ id: job.id, image: null, missing: true });
+        continue;
+      }
       const field = compose(a, b, job.aTime, job.step, motion, job.time, job.ahead);
       const painted = field ? await renderField(field, lut) : null;
 
@@ -92,7 +108,13 @@ self.onmessage = (e: MessageEvent<Incoming>) => {
     return;
   }
 
+  if (msg.k === "touch") {
+    getObs(msg.key);
+    return;
+  }
+
   if (msg.k === "obs") {
+    observations.delete(msg.key);
     observations.set(msg.key, {
       value: msg.value,
       mask: msg.mask,
@@ -111,6 +133,11 @@ self.onmessage = (e: MessageEvent<Incoming>) => {
     return;
   }
 
+  /* Settle any superseded job immediately so the caller never sits on
+     RENDER_TIMEOUT waiting for a reply that will never come. */
+  if (wanted) {
+    self.postMessage({ id: wanted.id, image: null });
+  }
   wanted = msg;
   void pump();
 };

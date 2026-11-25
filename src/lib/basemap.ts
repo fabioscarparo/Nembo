@@ -77,17 +77,27 @@ export function fallbackStyle(): StyleSpecification {
   };
 }
 
+/** Cached CARTO styles by theme so toggling light/dark stays instant. */
+const styleCache = new Map<boolean, StyleSpecification>();
+
 /**
  * Fetches the themed CARTO style, falling back to the local one. Returning the
  * parsed style rather than its URL means the fetch that proves the CDN is
  * reachable is also the fetch that loads it — MapLibre never goes back for it.
  */
 export async function resolveStyle(dark: boolean): Promise<StyleSpecification> {
+  const cached = styleCache.get(dark);
+  if (cached) return cached;
+
   try {
     const res = await fetch(CARTO[dark ? "dark" : "light"], {
       signal: AbortSignal.timeout(STYLE_TIMEOUT),
     });
-    if (res.ok) return (await res.json()) as StyleSpecification;
+    if (res.ok) {
+      const style = (await res.json()) as StyleSpecification;
+      styleCache.set(dark, style);
+      return style;
+    }
   } catch {
     // Blocked, offline, or too slow. The local outline is still a map.
   }

@@ -63,7 +63,12 @@ import { usePageVisible, useVisibleInterval } from "@/lib/visibility";
 import { firstLabelLayer, resolveStyle, withRadar } from "@/lib/basemap";
 import { readMuted, setMuted, useSound } from "@/lib/sound";
 import { readHaptics, setHaptics, useHaptics } from "@/lib/haptics";
-import { type ThemeChoice, applyTheme, readTheme } from "@/lib/theme";
+import {
+  type ThemeChoice,
+  applyTheme,
+  readTheme,
+  watchSystemTheme,
+} from "@/lib/theme";
 import { type Place, lookupPlace } from "@/lib/place";
 import Dock from "./Dock";
 import Legend from "./Legend";
@@ -157,11 +162,13 @@ export default function RadarMap() {
      the mute flag and the theme: a static export renders this on the server,
      where reading storage throws and the two passes would disagree. */
   const [product, setProduct] = useState<ProductKey>("VMI");
-  useEffect(() => setProduct(readProduct()), []);
-  /* Read by the paint pump, which runs across awaits and has to see the
-     product as it is now, not as it was when the job was queued. */
+  /* Read by the paint pump and theme watcher, which run across awaits and have
+     to see the product as it is now, not as it was when the job was queued. */
   const productNow = useRef(product);
   productNow.current = product;
+  /* Flipped once stored preferences are hydrated after mount, gating the
+     initial product poll and suppressing SlidingTabs mount-time slide. */
+  const [hydrated, setHydrated] = useState(false);
 
   const [latest, setLatest] = useState<number | null>(null);
   /* null means "follow live". Holding an absolute time rather than an index
@@ -201,25 +208,17 @@ export default function RadarMap() {
   /* Every timer below is gated on this. See lib/visibility.ts for what it
      was costing to leave them running. */
   const visible = usePageVisible();
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   const sound = useSound();
-  /* Starts unmuted and syncs after mount rather than reading storage during
-     render: a static export renders this on the server, where the read throws
-     and the two passes would disagree. */
+  /* Starts with server-safe defaults and hydrates once after mount so SSR and
+     hydration match and a stored non-default product never fires a wasted
+     initial VMI fetch or VMI LUT build. */
   const [muted, setMutedState] = useState(false);
-  useEffect(() => setMutedState(readMuted()), []);
-
-  /* Same contract as the mute flag: default on, synced after mount because a
-     static export renders this where storage throws. */
   const haptics = useHaptics();
   const [hapticsOn, setHapticsState] = useState(true);
-  useEffect(() => setHapticsState(readHaptics()), []);
-
-  /* Same three-state cycle as the portfolio: system, light, dark. Synced
-     after mount for the same reason as the mute flag — a static export
-     renders this on the server, where reading storage throws. */
   const [theme, setThemeState] = useState<ThemeChoice>("system");
-  useEffect(() => setThemeState(readTheme()), []);
 
   const pickTheme = useCallback(
     (next: ThemeChoice) => {
@@ -315,21 +314,68 @@ export default function RadarMap() {
     };
   }, [legendOpen, settingsOpen]);
 
+  /* Mirrors the table's own version, so anything drawn from the palette —
+     the legend's scale — knows to resample after a rebuild. */
+  const [paletteEpoch, setPaletteEpoch] = useState(0);
+
+  const syncPalette = useCallback((key: ProductKey) => {
+    const stops = RAMPS[key];
+    if (stops) setLut(buildLut(PRODUCTS[key], stops));
+    // The worker keeps its own copy; a stale one paints the wrong colours.
+    shareLut(currentLut());
+    setPaletteEpoch(lutEpoch());
+  }, []);
+
+  const refreshPalette = useCallback(() => {
+    syncPalette(productNow.current);
+  }, [syncPalette]);
+
+  /* Hydrate all stored preferences and build the initial LUT for the stored
+     product in one pass after mount. */
+  useEffect(() => {
+    const storedProduct = readProduct();
+    productNow.current = storedProduct;
+    setProduct(storedProduct);
+    setMutedState(readMuted());
+    setHapticsState(readHaptics());
+    setThemeState(readTheme());
+    syncPalette(storedProduct);
+    setHydrated(true);
+  }, [syncPalette]);
+
   /* The guard and the side effects sit outside the updater deliberately.
      React may invoke an updater more than once for a single dispatch — it does
      in StrictMode — so a write to storage or a click of the tick placed in
-     there happens twice for one press. An updater has to be a pure function of
-     the previous state; this reads `product` from the closure instead, which
-     is safe because the callback is rebuilt whenever it changes. */
+     there happens twice for one press. Updating the LUT synchronously here
+     batches `paletteEpoch` and `product` into one render so the Legend never
+     flashes a frame of the previous product's palette. */
   const pickProduct = useCallback(
     (next: ProductKey) => {
       if (next === product) return;
       storeProduct(next);
+      productNow.current = next;
+      syncPalette(next);
       haptics.tap();
       sound.slide();
       setProduct(next);
     },
-    [product, haptics, sound],
+    [product, syncPalette, haptics, sound],
+  );
+
+  /* Wraps a freshly fetched style so the radar is part of it before MapLibre
+     ever sees it. Used both when the map is built and when the theme swaps the
+     whole style out. */
+  const dressStyle = useCallback(
+    (style: StyleSpecification) =>
+      withRadar(
+        style,
+        RADAR_SOURCE,
+        RADAR_LAYER,
+        COMPOSITE_BOUNDS,
+        BLANK,
+        radarOpacity(),
+      ),
+    [],
   );
 
   const toggleHaptics = useCallback(() => {
@@ -360,34 +406,6 @@ export default function RadarMap() {
      pin stays part of the component tree. */
   const pinEl = useMemo(
     () => (typeof document === "undefined" ? null : document.createElement("div")),
-    [],
-  );
-
-  /* Mirrors the table's own version, so anything drawn from the palette —
-     the legend's scale — knows to resample after a rebuild. */
-  const [paletteEpoch, setPaletteEpoch] = useState(0);
-
-  const refreshPalette = useCallback(() => {
-    const stops = RAMPS[product];
-    if (stops) setLut(buildLut(PRODUCTS[product], stops));
-    // The worker keeps its own copy; a stale one paints the wrong colours.
-    shareLut(currentLut());
-    setPaletteEpoch(lutEpoch());
-  }, [product]);
-
-  /* Wraps a freshly fetched style so the radar is part of it before MapLibre
-     ever sees it. Used both when the map is built and when the theme swaps the
-     whole style out. */
-  const dressStyle = useCallback(
-    (style: StyleSpecification) =>
-      withRadar(
-        style,
-        RADAR_SOURCE,
-        RADAR_LAYER,
-        COMPOSITE_BOUNDS,
-        BLANK,
-        radarOpacity(),
-      ),
     [],
   );
 
@@ -423,15 +441,6 @@ export default function RadarMap() {
       style ? firstLabelLayer(style) : undefined,
     );
   }, []);
-
-  /* Declared before the map so it runs first on mount: the palette has to
-     exist before the first tile is painted, or the LUT of zeroes would paint
-     a transparent frame that then sits there until something else changes.
-     Keeping it out of the map effect also means switching product repaints
-     rather than rebuilding the entire map. */
-  useEffect(() => {
-    refreshPalette();
-  }, [refreshPalette]);
 
   /* ── Map ─────────────────────────────────────────────────── */
 
@@ -511,7 +520,10 @@ export default function RadarMap() {
         } catch {
           // No Permissions API: let the prompt decide.
         }
-        if (!cancelled) autoStart.current?.();
+        if (!cancelled) {
+          if (visibleRef.current) autoStart.current?.();
+          else resumeWatch.current = true;
+        }
       })();
 
       created = m;
@@ -546,7 +558,7 @@ export default function RadarMap() {
       created?.remove();
       map.current = null;
     };
-  }, [applyRadar, pinEl]);
+  }, [applyRadar, dressStyle, pinEl]);
 
   /* ── Newest observation ──────────────────────────────────── */
 
@@ -571,7 +583,7 @@ export default function RadarMap() {
       });
     },
     60_000,
-    visible,
+    visible && hydrated,
     product,
   );
 
@@ -755,12 +767,17 @@ export default function RadarMap() {
              the map stays blank until an unrelated state change. Bounded, and
              only before the first successful draw. */
           if (!frame) {
-            if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
+            if (
+              !wanted.current &&
+              !everPainted.current &&
+              coldRetries.current < COLD_RETRIES
+            ) {
               coldRetries.current += 1;
               wanted.current = next;
               await new Promise<void>((r) => {
                 window.setTimeout(r, COLD_RETRY_MS);
               });
+              if (map.current !== m) break;
             }
             continue;
           }
@@ -777,12 +794,17 @@ export default function RadarMap() {
              own schedule. Same drained-queue dead end as the branch above. */
           if (!src) {
             painted?.image.close();
-            if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
+            if (
+              !wanted.current &&
+              !everPainted.current &&
+              coldRetries.current < COLD_RETRIES
+            ) {
               coldRetries.current += 1;
               wanted.current = next;
               await new Promise<void>((r) => {
                 window.setTimeout(r, COLD_RETRY_MS);
               });
+              if (map.current !== m) break;
             }
             continue;
           }
@@ -811,12 +833,17 @@ export default function RadarMap() {
                the current bitmap it is released by the next hand-over, which
                is correct whether the source kept it or not. */
             if (painted) handOver(painted.image);
-            if (!everPainted.current && coldRetries.current < COLD_RETRIES) {
+            if (
+              !wanted.current &&
+              !everPainted.current &&
+              coldRetries.current < COLD_RETRIES
+            ) {
               coldRetries.current += 1;
               wanted.current = next;
               await new Promise<void>((r) => {
                 window.setTimeout(r, COLD_RETRY_MS);
               });
+              if (map.current !== m) break;
             }
             continue;
           }
@@ -845,20 +872,22 @@ export default function RadarMap() {
 
   /* ── Theme ───────────────────────────────────────────────── */
 
+  const styleReq = useRef(0);
+
   useEffect(() => {
-    return watchTheme(() => {
+    const stopSystem = watchSystemTheme();
+    const stopTheme = watchTheme(() => {
       refreshPalette();
 
       const m = map.current;
       if (!m) return;
 
-      /* Positron and Dark Matter are separate styles, so a theme change is a
-         style swap rather than a paint-property edit. Every source and layer
-         goes with it — the `style.load` handler puts the radar back, and
-         bumping the token makes the next paint repaint it in the new palette. */
+      /* Guarded by a monotonic counter so rapid theme toggles never let a
+         slower earlier fetch overwrite the basemap of a newer theme. */
+      const req = ++styleReq.current;
       resolveStyle(isDark())
         .then((raw) => {
-          if (map.current !== m) return;
+          if (map.current !== m || styleReq.current !== req) return;
           const style = dressStyle(raw);
           /* setStyle drops every source and layer; `style.load` puts the radar
              back and bumps the epoch, which repaints the frame in the new
@@ -871,6 +900,11 @@ export default function RadarMap() {
            theme toggle that otherwise worked. The old palette stays. */
         .catch(() => {});
     });
+
+    return () => {
+      stopSystem();
+      stopTheme();
+    };
   }, [refreshPalette, dressStyle]);
 
   /* ── Place ───────────────────────────────────────────────── */
@@ -881,6 +915,7 @@ export default function RadarMap() {
   const coarse = position
     ? `${position[0].toFixed(2)},${position[1].toFixed(2)}`
     : null;
+  const placeFor = useRef<string | null>(null);
 
   /* Conditions drift; the name does not. Refreshed on the same quarter-hour
      cadence Open-Meteo publishes on, and immediately when you have actually
@@ -889,13 +924,22 @@ export default function RadarMap() {
   useVisibleInterval(
     (signal) => {
       if (!coarse) return;
-      const [lon, lat] = coarse.split(",").map(Number);
+      const key = coarse;
+      const [lon, lat] = key.split(",").map(Number);
       void lookupPlace(lon, lat, signal).then((p) => {
-        if (!signal.aborted) setPlace(p);
+        if (signal.aborted) return;
+        /* Keep the previous place pill across transient refresh failures at
+           the same cell, mirroring `fetchSteering`'s resilience. */
+        if (p) {
+          placeFor.current = key;
+          setPlace(p);
+        } else if (placeFor.current !== key) {
+          setPlace(null);
+        }
       });
     },
     900_000,
-    visible,
+    visible && coarse !== null,
     coarse,
   );
 
@@ -941,14 +985,12 @@ export default function RadarMap() {
    * page scrolling, which is what space does otherwise. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
+      if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) {
+        return;
+      }
       const el = e.target as HTMLElement | null;
-      const tag = el?.tagName;
       if (
-        tag === "BUTTON" ||
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
+        el?.closest("button, a, input, textarea, select, [contenteditable]") ||
         el?.isContentEditable
       ) {
         return;
@@ -1017,6 +1059,12 @@ export default function RadarMap() {
       pinned.current = true;
       pin.current.addTo(m);
     }
+    /* If a fix landed before MapLibre finished mounting, perform the one-time
+       initial flight now that the map is ready. */
+    if (!flown.current) {
+      flown.current = true;
+      m.flyTo({ center: position, zoom: 8, duration: 1400 });
+    }
   }, [position, mapReady]);
 
   /* Our own watch rather than MapLibre's GeolocateControl.
@@ -1036,6 +1084,7 @@ export default function RadarMap() {
   const autoStart = useRef<(() => boolean) | null>(null);
   const watch = useRef<number | null>(null);
   const flown = useRef(false);
+  const resumeWatch = useRef(false);
 
   /* `quiet` resumes a watch the page itself paused, which is not the visitor
      asking to be located: no busy state on the button. */
@@ -1054,16 +1103,23 @@ export default function RadarMap() {
         const at: [number, number] = [fix.coords.longitude, fix.coords.latitude];
         setPosition(at);
 
-        if (!flown.current) {
+        if (!flown.current && map.current) {
           flown.current = true;
           /* No `essential`, so a visitor who asked for reduced motion gets an
              instant jump instead of a flight. */
-          map.current?.flyTo({ center: at, zoom: 8, duration: 1400 });
+          map.current.flyTo({ center: at, zoom: 8, duration: 1400 });
         }
       },
       (err) => {
         setLocating(false);
-        if (err.code === err.PERMISSION_DENIED) setLocationDenied(true);
+        if (err.code === err.PERMISSION_DENIED) {
+          if (watch.current !== null) {
+            navigator.geolocation?.clearWatch(watch.current);
+            watch.current = null;
+          }
+          resumeWatch.current = false;
+          setLocationDenied(true);
+        }
       },
       { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 },
     );
@@ -1078,7 +1134,6 @@ export default function RadarMap() {
      A watch keeps the location service running for as long as it exists,
      and a backgrounded tab has no pin anyone can see. Resumed quietly on
      return; `flown` survives the pause, so the camera does not fly again. */
-  const resumeWatch = useRef(false);
   useEffect(() => {
     if (visible) {
       if (resumeWatch.current) {
@@ -1109,6 +1164,7 @@ export default function RadarMap() {
    */
   const locate = useCallback(() => {
     const m = map.current;
+    let started = true;
 
     /* Work first, feedback after: a throw from either call used to return
        from the handler with the watch never started. */
@@ -1120,15 +1176,82 @@ export default function RadarMap() {
         watch.current = null;
       }
       flown.current = false;
-      startWatching();
+      started = startWatching();
     }
 
     haptics.tap();
     /* Fired on the press, not on the fix. The permission prompt can sit there
        for a minute or never be answered, and a sound arriving then belongs to
        nothing the visitor is still doing. This one confirms the press. */
-    sound.success();
+    if (started) sound.success();
   }, [startWatching, position, haptics, sound]);
+
+  const onTimelineChange = useCallback((t: number) => {
+    // Scrubbing by hand takes over from the loop.
+    setPlaying(false);
+    setSelected(t);
+  }, []);
+
+  /* Kept always mounted — inside Timeline when a sequence exists, or aligned
+     on the right of the fallback row while loading / during a DPC outage — so
+     geolocation and settings are never unreachable. */
+  const trailingControls = (
+    <div className="relative flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        onClick={locate}
+        disabled={!locationAvailable}
+        /* Fade on the glyph, never on the surface — see the clock
+           button, which lost its frosted backdrop the same way. */
+        className="dock-surface dock-btn dock-btn-lg shrink-0 rounded-full disabled:cursor-default"
+        aria-label={
+          !locationAvailable
+            ? "Geolocalizzazione non disponibile"
+            : locationDenied
+              ? "Posizione non disponibile"
+              : "Mostra la mia posizione"
+        }
+        aria-busy={locating}
+      >
+        <Location
+          size={16}
+          className={
+            locating
+              ? "animate-pulse"
+              : locationDenied || !locationAvailable
+                ? "opacity-40"
+                : undefined
+          }
+        />
+      </button>
+
+      <button
+        type="button"
+        onClick={toggleSettings}
+        className="dock-surface dock-btn dock-btn-lg dock-toggle shrink-0 rounded-full"
+        aria-label="Impostazioni"
+        aria-expanded={settingsOpen}
+        aria-controls="settings-panel"
+      >
+        <Gear size={16} className={settingsOpen ? "text-fg" : undefined} />
+      </button>
+
+      {/* Anchored to the wrapper the button sits in. From `lg` it slides out
+          to sit centred over the gear button — the panel's half-width against
+          the button's centre, 128 less the 22px from the strip's right edge. */}
+      <Settings
+        open={settingsOpen}
+        muted={muted}
+        onToggleSound={toggleSound}
+        hapticsOn={hapticsOn}
+        onToggleHaptics={toggleHaptics}
+        theme={theme}
+        onPickTheme={pickTheme}
+        hydrated={hydrated}
+        place="absolute bottom-full right-0 mb-2 lg:right-[-106px]"
+      />
+    </div>
+  );
 
   return (
     <>
@@ -1136,7 +1259,7 @@ export default function RadarMap() {
       {/* One row, so the two pills divide the width instead of competing for
           it. Transparent to pointers between them, or the strip would eat
           drags on the map along the whole top edge. */}
-      <div className="pointer-events-none absolute inset-x-0 top-4 flex items-start gap-2 px-4">
+      <div className="safe-top pointer-events-none absolute inset-x-0 flex items-start gap-2">
         <PlacePill place={place} />
         {stale && <Notice />}
         <Dock
@@ -1144,6 +1267,7 @@ export default function RadarMap() {
           onPickProduct={pickProduct}
           legendOpen={legendOpen}
           onToggleLegend={toggleLegend}
+          hydrated={hydrated}
         />
 
         {/* Under the info button that opens it, which is the last thing in
@@ -1155,7 +1279,7 @@ export default function RadarMap() {
           product={product}
           open={legendOpen}
           paletteEpoch={paletteEpoch}
-          place="is-down pointer-events-auto absolute right-4 top-full mt-2"
+          place="is-down safe-right pointer-events-auto absolute top-full mt-2"
         />
       </div>
 
@@ -1171,120 +1295,26 @@ export default function RadarMap() {
 
       {/* The row, always. Its two occupants are not always the same: the
           credits and the strip's height exist from the first paint, the
-          timeline itself only once there is a sequence to scrub.
-      
-          Reserving the height is the whole point of the placeholder. Swapping
-          a 44 px strip in where there was nothing would push the credits up
-          and cost a layout shift, and CLS is the one metric this page already
-          scores full marks on. */}
-      <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 px-4 pb-5">
+          timeline itself only once there is a sequence to scrub. */}
+      <div className="safe-bottom absolute inset-x-0 bottom-0 flex flex-col items-center gap-2">
         <Credits at={frames[observedCount - 1]} />
 
         {displayed !== null && frames.length > 1 ? (
           <Timeline
-          frames={frames}
-          observedCount={observedCount}
-          value={displayed}
-          onChange={(t) => {
-            // Scrubbing by hand takes over from the loop.
-            setPlaying(false);
-            setSelected(t);
-          }}
-          playing={playing}
-          onTogglePlay={togglePlay}
-          onNow={showNow}
-          forecastSource={sequence?.source ?? "none"}
-          trailing={
-            /* Anchored to the locate button rather than to the viewport. The
-               panel toggles sit directly above it, and the timeline's height
-               is not a constant — the credit line above it wraps on a narrow
-               screen — so an offset measured from the page would drift.
-               Positioned against the button they belong to, they cannot. */
-            <div className="relative flex shrink-0 items-center gap-2">
-            {/* Beside the timeline rather than up with the settings: finding
-               yourself is an action you take on the map, like scrubbing, not
-               a preference you set once. Same pill and same diameter as the
-               play button at the other end, so the row reads as one control
-               strip with the slider between its two ends. */}
-            <button
-              type="button"
-              onClick={locate}
-              disabled={!locationAvailable}
-              /* Fade on the glyph, never on the surface — see the clock
-                 button, which lost its frosted backdrop the same way. */
-              className="dock-surface dock-btn dock-btn-lg shrink-0 rounded-full disabled:cursor-default"
-              aria-label={
-                !locationAvailable
-                  ? "Geolocalizzazione non disponibile"
-                  : locationDenied
-                    ? "Posizione non disponibile"
-                    : "Mostra la mia posizione"
-              }
-              aria-busy={locating}
-            >
-              <Location
-                size={16}
-                className={
-                  locating
-                    ? "animate-pulse"
-                    : locationDenied || !locationAvailable
-                      ? "opacity-40"
-                      : undefined
-                }
-              />
-            </button>
-
-              {/* After the locate button, so the strip reads outward from the
-                  slider: where you are, then what the colours mean, then the
-                  preferences — nearest first.
-
-                  `flex-col-reverse` below `sm` keeps that reading when the row
-                  runs out of width and the pair stacks: the DOM order is the
-                  row's, and reversing the column puts info directly above
-                  locate with settings beyond it, rather than upside down. */}
-              {/* Beside the locate button, at every width. Inline rather than
-                  in a component of its own: it is one button, and the locate
-                  button beside it has always been inline for the same
-                  reason. */}
-              <button
-                type="button"
-                onClick={toggleSettings}
-                className="dock-surface dock-btn dock-btn-lg dock-toggle shrink-0 rounded-full"
-                aria-label="Impostazioni"
-                aria-pressed={settingsOpen}
-                aria-expanded={settingsOpen}
-              >
-                <Gear size={16} className={settingsOpen ? "text-fg" : undefined} />
-              </button>
-
-              {/* Anchored to the wrapper the button sits in. The mobile offset
-                  clears the stacked settings button: 44px and the 8px each
-                  side of it.
-
-                  From `lg` it slides out to sit centred over that button — the
-                  panel's half-width against the button's centre, 128 less the
-                  22px from the strip's right edge, negative because a centred
-                  panel reaches past the strip. `lg` rather than `sm` because
-                  that reach needs room to the right of the row, and a viewport
-                  under about 950px does not have it. */}
-              <Settings
-                open={settingsOpen}
-                muted={muted}
-                onToggleSound={toggleSound}
-                hapticsOn={hapticsOn}
-                onToggleHaptics={toggleHaptics}
-                theme={theme}
-                onPickTheme={pickTheme}
-                place="absolute bottom-full right-0 mb-2 lg:right-[-106px]"
-              />
-            </div>
-          }
+            frames={frames}
+            observedCount={observedCount}
+            value={displayed}
+            onChange={onTimelineChange}
+            playing={playing}
+            onTogglePlay={togglePlay}
+            onNow={showNow}
+            forecastSource={sequence?.source ?? "none"}
+            trailing={trailingControls}
           />
         ) : (
-          /* The same height as the strip it stands in for, so the row does
-             not change size when the sequence arrives. Both read it from
-             `--control-h`. */
-          <div className="control-h" aria-hidden />
+          <div className="control-h flex w-full max-w-[64rem] items-center justify-end gap-1.5 sm:gap-2">
+            {trailingControls}
+          </div>
         )}
       </div>
     </>

@@ -23,27 +23,20 @@ type Props = {
   /** Which quantity is on screen; drives which tab carries the pill. */
   product: ProductKey;
   onPickProduct: (key: ProductKey) => void;
-  /** Reflected in `aria-pressed` and in the icon's colour, so the button says
+  /** Reflected in `aria-expanded` and in the icon's colour, so the button says
    *  whether its panel is up without the panel being in view. */
   legendOpen: boolean;
   onToggleLegend: () => void;
+  /** False until stored preferences are hydrated, suppressing mount-time pill slide. */
+  hydrated: boolean;
 };
 
-/**
- * The quantity is three tabs rather than one button that cycles, for the same
- * reason the theme stopped being one: a single label reading "dBZ" says what
- * you are looking at and gives no sign that it can be changed at all, let
- * alone into what. Three of them, with the current one carrying a pill, say
- * both at once.
- *
- * Memoising works because none of these props move while scrubbing — the
- * callbacks are stable across a drag, so React can skip the subtree entirely.
- */
 function DockControls({
   product,
   onPickProduct,
   legendOpen,
   onToggleLegend,
+  hydrated,
 }: Props) {
   /* The unit is the label because it is the shortest honest name for what is
      on screen, and the one the legend's own heading repeats. The full name
@@ -70,6 +63,7 @@ function DockControls({
           value={product}
           onPick={onPickProduct}
           label="Grandezza"
+          animate={hydrated}
           className="dock-tabs numeric text-[10px] font-medium"
         />
       </div>
@@ -80,8 +74,8 @@ function DockControls({
         onClick={onToggleLegend}
         className="dock-surface dock-btn dock-btn-lg dock-toggle rounded-full"
         aria-label="Come leggere il radar"
-        aria-pressed={legendOpen}
         aria-expanded={legendOpen}
+        aria-controls="legend-panel"
       >
         <InfoCircle size={16} className={legendOpen ? "text-fg" : undefined} />
       </button>

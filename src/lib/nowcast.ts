@@ -110,14 +110,16 @@ const observations = new Map<string, Field>();
 const inFlight = new Map<string, Promise<Field | null>>();
 
 /**
- * Files an observation in the cache, evicting the oldest once it is full.
+ * Files an observation in the LRU cache, evicting the least-recently-used
+ * entry once full.
  *
- * Eviction is by insertion order rather than by last use: a Map preserves it
- * for free, and the access pattern here is a sweep along a timeline rather
- * than the repeated random hits an LRU is for. See CACHE_LIMIT for why the
- * size is what it is.
+ * LRU rather than pure FIFO: `buildSequence` inserts `T` before `prefetch`
+ * inserts `T-5..T-25`, so pure insertion order puts newer timestamps ahead of
+ * older ones in the eviction queue and thrashes active observations as new
+ * scans arrive.
  */
 function remember(cacheKey: string, field: Field) {
+  observations.delete(cacheKey);
   observations.set(cacheKey, field);
   /* Pushed on arrival (~5 min), not per frame. Cloned rather than
      transferred: the motion estimate and the inline fallback still read it. */
@@ -129,7 +131,7 @@ function remember(cacheKey: string, field: Field) {
     box: field.box,
   });
   while (observations.size > CACHE_LIMIT) {
-    // Insertion order, so the oldest fetch is the first one out.
+    // Map iterates oldest-used first because hits delete and re-insert.
     const oldest = observations.keys().next().value;
     if (oldest === undefined) break;
     observations.delete(oldest);
@@ -196,7 +198,13 @@ async function observation(
   const cacheKey = `${product.key}:${time}`;
 
   const hit = observations.get(cacheKey);
-  if (hit) return hit;
+  if (hit) {
+    observations.delete(cacheKey);
+    observations.set(cacheKey, hit);
+    /* Keep the worker's LRU order in lockstep with ours (tiny key-only msg). */
+    if (renderHandle) renderHandle.postMessage({ k: "touch", key: cacheKey });
+    return hit;
+  }
 
   const pending = inFlight.get(cacheKey);
   if (pending) return pending;
@@ -414,6 +422,8 @@ type RenderReply = {
   coordinates?: Corners;
   /** Set with a null image when the field existed and held nothing to draw. */
   empty?: boolean;
+  /** Set when a non-null observation key was absent from the worker cache. */
+  missing?: boolean;
 };
 
 /**
@@ -430,6 +440,8 @@ let renderHandle: Worker | null = null;
 let renderUnavailable = false;
 let nextRenderId = 1;
 const renderPending = new Map<number, (r: RenderReply) => void>();
+let lastSharedLut: Uint8Array | null = null;
+let lastSharedMotion: Motion | null = null;
 
 function renderWorker(): Worker | null {
   if (renderUnavailable) return null;
@@ -443,8 +455,15 @@ function renderWorker(): Worker | null {
       type: "module",
     });
     w.onmessage = (e: MessageEvent<RenderReply>) => {
-      renderPending.get(e.data.id)?.(e.data);
-      renderPending.delete(e.data.id);
+      const cb = renderPending.get(e.data.id);
+      if (cb) {
+        renderPending.delete(e.data.id);
+        cb(e.data);
+      } else {
+        /* Late reply after timeout: close the transferred bitmap so up to
+           9 MB of GPU memory does not leak. */
+        e.data.image?.close();
+      }
     };
     /* One error retires it: every later frame would otherwise pay
        RENDER_TIMEOUT before falling back. */
@@ -456,7 +475,9 @@ function renderWorker(): Worker | null {
       w.terminate();
     };
     renderHandle = w;
-    // Backfill: the worker may be built after observations have landed.
+    // Backfill: the worker may be built after state or observations landed.
+    if (lastSharedLut) w.postMessage({ k: "lut", lut: lastSharedLut });
+    if (lastSharedMotion) w.postMessage({ k: "seq", motion: lastSharedMotion });
     for (const [key, field] of observations) {
       w.postMessage({ k: "obs", key, value: field.value, mask: field.mask, box: field.box });
     }
@@ -474,11 +495,13 @@ function renderPost(msg: unknown) {
 
 /** The worker's tiles.ts is a separate module instance; its table is empty. */
 export function shareLut(lut: Uint8Array) {
+  lastSharedLut = lut;
   renderPost({ k: "lut", lut });
 }
 
 /** 160x224 floats, 286KB. Once per sequence, never per frame. */
 export function shareMotion(motion: Motion) {
+  lastSharedMotion = motion;
   renderPost({ k: "seq", motion });
 }
 
@@ -500,16 +523,29 @@ export async function paintAt(
 ): Promise<Frame> {
   const need = bracket(seq, time);
 
-  /* Awaited before posting: this guarantees `remember` has already pushed
-     both observations to the worker. */
-  const [a, b] = await Promise.all([
-    observation(seq.product, need.aTime),
-    need.ahead ? Promise.resolve(null) : observation(seq.product, need.bTime),
-  ]);
+  /* On an exact historical observation (`time === need.aTime`), `b` carries
+     weight 0 and is needed only as a fallback if `a` failed to load. */
+  let a: Field | null;
+  let b: Field | null;
+  if (need.ahead) {
+    a = await observation(seq.product, need.aTime);
+    b = null;
+  } else if (time === need.aTime) {
+    a = await observation(seq.product, need.aTime);
+    b = a ? null : await observation(seq.product, need.bTime);
+  } else {
+    [a, b] = await Promise.all([
+      observation(seq.product, need.aTime),
+      observation(seq.product, need.bTime),
+    ]);
+  }
   /* `null`, not an empty frame: the observations could not be assembled, and
      the caller's retry is for exactly this. An empty frame is a different
      answer and comes back as `{ painted: null }`. */
   if (!a && !b) return null;
+
+  const aKey = a ? `${seq.product.key}:${need.aTime}` : null;
+  const bKey = b ? `${seq.product.key}:${need.bTime}` : null;
 
   const w = renderWorker();
   if (w) {
@@ -527,8 +563,8 @@ export async function paintAt(
         k: "render",
         id,
         time,
-        aKey: `${seq.product.key}:${need.aTime}`,
-        bKey: `${seq.product.key}:${need.bTime}`,
+        aKey,
+        bKey,
         aTime: need.aTime,
         step: need.step,
         ahead: need.ahead,
@@ -539,6 +575,16 @@ export async function paintAt(
     }
     // Clear sky: a correct answer, not a failure to recompute.
     if (reply?.empty) return { painted: null };
+    /* If the worker lost an entry due to cache eviction, re-push it so the
+       following frame stays off-thread before computing this one inline. */
+    if (reply?.missing) {
+      if (a && aKey) {
+        w.postMessage({ k: "obs", key: aKey, value: a.value, mask: a.mask, box: a.box });
+      }
+      if (b && bKey) {
+        w.postMessage({ k: "obs", key: bKey, value: b.value, mask: b.mask, box: b.box });
+      }
+    }
     /* Anything else — a timeout, a worker error, an observation the worker
        does not have — is recomputed here. */
   }

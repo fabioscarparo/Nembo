@@ -130,7 +130,7 @@ function readToken(token: string): [number, number, number] {
 const SATURATION = 1.3;
 /** Expansion around mid-grey: the ends separate, the middle barely moves. */
 const CONTRAST = 1.08;
-/** Applied as `v ** (1 / GAMMA)`. Under 1, so it lifts rather than darkens. */
+/** Applied as `v ** GAMMA`. Under 1, so it lifts midtones rather than darkens. */
 const GAMMA = 0.92;
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
@@ -156,7 +156,7 @@ function grade([r, g, b]: [number, number, number]): [number, number, number] {
   for (let i = 0; i < 3; i++) {
     let v = luma + (out[i] - luma) * SATURATION;
     v = (v - 0.5) * CONTRAST + 0.5;
-    out[i] = clamp01(v) ** (1 / GAMMA);
+    out[i] = clamp01(v) ** GAMMA;
   }
   return out;
 }
@@ -234,9 +234,14 @@ export function buildLut(product: Product, stops: Stop[]): Uint8Array {
     let hi = stops.findIndex((s) => s.at > v);
     if (hi === -1) {
       const last = stops.length - 1;
-      lut[o] = colors[last][0];
-      lut[o + 1] = colors[last][1];
-      lut[o + 2] = colors[last][2];
+      const [r, g, b] = grade([
+        colors[last][0] / 255,
+        colors[last][1] / 255,
+        colors[last][2] / 255,
+      ]);
+      lut[o] = Math.round(r * 255);
+      lut[o + 1] = Math.round(g * 255);
+      lut[o + 2] = Math.round(b * 255);
       lut[o + 3] = alphaByte(stops, v);
       continue;
     }
@@ -264,28 +269,25 @@ export function buildLut(product: Product, stops: Stop[]): Uint8Array {
 /* ── Theme ──────────────────────────────────────────────────── */
 
 /**
- * The theme toggle writes a class onto <html> and emits nothing, so the only
- * way to hear about it is to watch the attribute — plus the media query, for
- * the visitor still on "system" when the OS flips at sunset.
- *
- * The callback fires after the class has landed. Rebuild the LUT and re-upload
- * the 256×1 texture; never re-fetch the tiles, whose decoded values did not
- * change. Returns its own teardown.
+ * Watches the `dark` class on <html> and notifies only when the resolved
+ * appearance actually flips. OS theme changes while on `"system"` are synced
+ * onto that class by `watchSystemTheme()` in theme.ts, so explicit light/dark
+ * overrides and unrelated class edits never trigger a needless style reload.
  */
 export function watchTheme(onChange: () => void): () => void {
-  const observer = new MutationObserver((records) => {
-    if (records.some((r) => r.attributeName === "class")) onChange();
+  const root = document.documentElement;
+  let wasDark = root.classList.contains("dark");
+
+  const observer = new MutationObserver(() => {
+    const nowDark = root.classList.contains("dark");
+    if (nowDark === wasDark) return;
+    wasDark = nowDark;
+    onChange();
   });
-  observer.observe(document.documentElement, {
+  observer.observe(root, {
     attributes: true,
     attributeFilter: ["class"],
   });
 
-  const media = window.matchMedia("(prefers-color-scheme: dark)");
-  media.addEventListener("change", onChange);
-
-  return () => {
-    observer.disconnect();
-    media.removeEventListener("change", onChange);
-  };
+  return () => observer.disconnect();
 }

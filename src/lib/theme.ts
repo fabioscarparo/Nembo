@@ -59,6 +59,22 @@ export function applyTheme(choice: ThemeChoice): void {
   }
 }
 
+/**
+ * Keeps the `dark` class in step with the OS while the stored choice is
+ * `"system"`. Explicit `"light"` / `"dark"` choices ignore OS flips, so
+ * downstream observers (`watchTheme`) fire only when the effective appearance
+ * actually changes.
+ */
+export function watchSystemTheme(): () => void {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const sync = () => {
+    if (readTheme() !== "system") return;
+    document.documentElement.classList.toggle("dark", media.matches);
+  };
+  media.addEventListener("change", sync);
+  return () => media.removeEventListener("change", sync);
+}
+
 /* A cycling helper and a set of button labels lived here, for when the theme
    was one dock button stepped through three states. The settings panel names
    all three and lets you pick, so there is no cycle to advance and no label to
